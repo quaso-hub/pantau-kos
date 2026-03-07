@@ -49,24 +49,78 @@ _settings_ratelimit: dict[int, list[float]] = {}
 _RATELIMIT_WINDOW = 60.0
 _RATELIMIT_MAX_CALLS = 3
 
-# ── Idempotency cache — prevent duplicate update processing ──────────────────
-# Maps update_id → timestamp of first seen. TTL = 5 minutes.
+# ── Idempotency + In-Flight Analysis Lock ────────────────────────────────────
+#
+# Two-level guard:
+#   Level 1 — _processed_updates: dict[update_id, timestamp]
+#     Prevents the same Telegram update_id from being dispatched more than
+#     once.  Telegram retries after ~60 s if it never gets HTTP 200, so this
+#     stops the 3-4x duplicate burst.
+#
+#   Level 2 — _active_analyses: dict[update_id, asyncio.Task]
+#     Tracks the in-flight background Task spawned by handle_message.
+#     If a retry slips through Level 1 (race between threads), the Task check
+#     ensures we never spawn two concurrent analyses for the same update.
+#     The Task is cleaned up via its own done-callback.
+#
+# Usage flow:
+#   _claim_update(uid) → True  = "I own this, proceed"
+#   _claim_update(uid) → False = "already owned/processing, drop"
+#   _release_update(uid)       = called from Task done-callback on finish
+
 _processed_updates: dict[int, float] = {}
-_IDEMPOTENCY_TTL = 300.0  # seconds
+_active_analyses:   dict[int, "asyncio.Task[None]"] = {}
+_IDEMPOTENCY_TTL = 300.0  # 5 min — eviction window
 
 
-def _is_duplicate_update(update_id: int) -> bool:
-    """Return True if this update_id was already processed (idempotency guard)."""
+def _claim_update(update_id: int) -> bool:
+    """
+    Atomically claim an update_id for processing.
+
+    Returns True  → caller is the sole owner; safe to spawn a Task.
+    Returns False → duplicate or already in-flight; caller must drop silently.
+    """
     now = time.monotonic()
-    # Evict expired entries to keep memory bounded
-    expired = [uid for uid, ts in _processed_updates.items() if now - ts > _IDEMPOTENCY_TTL]
-    for uid in expired:
+
+    # Evict stale entries (finished but old) from processed set
+    stale = [uid for uid, ts in _processed_updates.items() if now - ts > _IDEMPOTENCY_TTL]
+    for uid in stale:
+        del _processed_updates[uid]
+
+    # Level 1: already seen this update_id?
+    if update_id in _processed_updates:
+        log.warning("Idempotency: duplicate update_id=%s — dropped", update_id)
+        return False
+
+    # Level 2: Task still running (race condition between PTB threads)?
+    existing_task = _active_analyses.get(update_id)
+    if existing_task is not None and not existing_task.done():
+        log.warning("In-flight lock: update_id=%s task still running — dropped", update_id)
+        return False
+
+    # Register ownership
+    _processed_updates[update_id] = now
+    return True
+
+
+def _release_update(update_id: int) -> None:
+    """Remove the in-flight Task entry once it completes (called via done-callback)."""
+    _active_analyses.pop(update_id, None)
+
+
+# Backward-compat alias used by handle_callback_query (lightweight, no Task)
+def _is_duplicate_update(update_id: int) -> bool:
+    """Simple Level-1 dedup for non-analysis updates (callbacks, commands)."""
+    now = time.monotonic()
+    stale = [uid for uid, ts in _processed_updates.items() if now - ts > _IDEMPOTENCY_TTL]
+    for uid in stale:
         del _processed_updates[uid]
     if update_id in _processed_updates:
-        log.warning("Duplicate update_id=%s — skipping", update_id)
+        log.warning("Duplicate callback update_id=%s — dropped", update_id)
         return True
     _processed_updates[update_id] = now
     return False
+
 
 
 def _get_container(context: CallbackContext) -> Container:
@@ -278,21 +332,38 @@ async def handle_message(
     context: ContextTypes.DEFAULT_TYPE,
     allowed_chat_id: int,
 ) -> None:
-    # ── Idempotency guard ──────────────────────────────────────────────────
-    if update.update_id and _is_duplicate_update(update.update_id):
-        return
+    """
+    PTB entry-point for all user messages.
+
+    CRITICAL PATH — must return to PTB in < 1 s so the next update can be
+    dequeued before Telegram's webhook timeout fires.
+
+    Flow:
+      1. Idempotency claim  → drop duplicates instantly
+      2. Auth + input parse  → cheap synchronous work only
+      3. asyncio.create_task → hand heavy analysis to background
+      4. return              → PTB marks handler done; Flask already sent 200
+    """
+    update_id = update.update_id
+
+    # ── Level-1 + Level-2 atomic claim ────────────────────────────────────
+    if not _claim_update(update_id):
+        return  # duplicate burst from Telegram retry — silently ignore
 
     msg = update.message
     if not msg:
+        _release_update(update_id)
         return
     if msg.chat_id != allowed_chat_id:
         await msg.reply_text("Access denied.")
+        _release_update(update_id)
         return
 
     container = _get_container(context)
     text = msg.text or msg.caption or ""
     image_bytes: Optional[bytes] = None
 
+    # Image download is fast (Telegram CDN) — do it here before task spawn
     if msg.photo:
         image_bytes = await _download_photo(context.bot, msg.photo[-1].file_id)
     elif msg.document and msg.document.mime_type and msg.document.mime_type.startswith("image/"):
@@ -307,20 +378,48 @@ async def handle_message(
             ),
             parse_mode=ParseMode.MARKDOWN_V2,
         )
+        _release_update(update_id)
         return
 
     links = re.findall(r"https?://[^\s]+", text)
     source_link = links[0] if links else ""
 
-    await _run_analysis_with_progress(
-        bot=context.bot,
-        chat_id=allowed_chat_id,
-        text=text,
-        image_bytes=image_bytes,
-        source_link=source_link,
-        source="manual",
-        container=container,
+    # ── Fire background Task — handler returns immediately ─────────────────
+    task = asyncio.create_task(
+        _run_analysis_with_progress(
+            bot=context.bot,
+            chat_id=allowed_chat_id,
+            text=text,
+            image_bytes=image_bytes,
+            source_link=source_link,
+            source="manual",
+            container=container,
+        ),
+        name=f"analysis-uid{update_id}",
     )
+
+    # Register in-flight task so concurrent retries are blocked
+    _active_analyses[update_id] = task
+
+    # Cleanup + log when task finishes (success or exception)
+    def _on_done(t: "asyncio.Task[None]") -> None:
+        _release_update(update_id)
+        if t.cancelled():
+            log.warning("Analysis task cancelled: update_id=%s", update_id)
+        elif t.exception():
+            log.error(
+                "Analysis task raised unhandled exception: update_id=%s — %s",
+                update_id,
+                t.exception(),
+                exc_info=t.exception(),
+            )
+        else:
+            log.info("Analysis task finished cleanly: update_id=%s", update_id)
+
+    task.add_done_callback(_on_done)
+    # Handler returns here — PTB is free to process the next update immediately
+
+
 
 
 # ── Callback query handler ───────────────────────────────────────────────────

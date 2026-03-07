@@ -126,7 +126,10 @@ def _build_application() -> Application:
         .token(TELEGRAM_TOKEN)
         .updater(None)
         .post_init(_post_init)
-        .build()
+        .concurrent_updates(True)   # ← PTB processes next update immediately,
+        .build()                    #   even while a previous handler is awaited.
+                                    #   Safe because handle_message returns < 1 s
+                                    #   (analysis runs in a background Task).
     )
 
     # ── Inject container into bot_data for all handlers to access ─────────
