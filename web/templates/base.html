@@ -1,29 +1,412 @@
 <!DOCTYPE html>
-<html lang="id">
+<html lang="id" class="dark">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{% block title %}God Eye Dashboard{% endblock %}</title>
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <!-- Tailwind -->
   <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: { sans: ['Inter', 'sans-serif'], mono: ['JetBrains Mono', 'monospace'] },
+          colors: {
+            brand: { 50:'#eef2ff', 100:'#e0e7ff', 200:'#c7d2fe', 300:'#a5b4fc', 400:'#818cf8', 500:'#6366f1', 600:'#4f46e5', 700:'#4338ca', 800:'#3730a3', 900:'#312e81' },
+            surface: { DEFAULT:'#0f0f1a', 1:'#13131f', 2:'#1a1a2e', 3:'#1e1e35', 4:'#252540' },
+            accent: { cyan:'#06b6d4', violet:'#8b5cf6', green:'#10b981', amber:'#f59e0b', rose:'#f43f5e' },
+          },
+          backdropBlur: { xs:'2px' },
+          animation: {
+            'pulse-slow':'pulse 3s cubic-bezier(0.4,0,0.6,1) infinite',
+            'float':'float 6s ease-in-out infinite',
+            'shimmer':'shimmer 2s linear infinite',
+            'fade-in':'fadeIn 0.4s ease-out forwards',
+            'slide-up':'slideUp 0.5s cubic-bezier(0.16,1,0.3,1) forwards',
+          },
+          keyframes: {
+            float:{ '0%,100%':{ transform:'translateY(0px)' }, '50%':{ transform:'translateY(-10px)' } },
+            shimmer:{ '0%':{ backgroundPosition:'-200% 0' }, '100%':{ backgroundPosition:'200% 0' } },
+            fadeIn:{ from:{ opacity:'0' }, to:{ opacity:'1' } },
+            slideUp:{ from:{ opacity:'0', transform:'translateY(20px)' }, to:{ opacity:'1', transform:'translateY(0)' } },
+          },
+          boxShadow: {
+            'glow-brand':'0 0 20px rgba(99,102,241,0.35)',
+            'glow-cyan':'0 0 20px rgba(6,182,212,0.35)',
+            'glow-green':'0 0 20px rgba(16,185,129,0.25)',
+            'inner-glow':'inset 0 1px 0 rgba(255,255,255,0.06)',
+          },
+        }
+      }
+    }
+  </script>
+
+  <!-- GSAP -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js" defer></script>
+
+  <!-- Three.js -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js" defer></script>
+
+  <style>
+    :root {
+      --surface-0: #0f0f1a;
+      --surface-1: #13131f;
+      --surface-2: #1a1a2e;
+      --surface-3: #1e1e35;
+      --brand: #6366f1;
+      --brand-glow: rgba(99,102,241,0.4);
+    }
+
+    *, *::before, *::after { box-sizing: border-box; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: 'Inter', sans-serif;
+      background-color: var(--surface-0);
+      color: #e2e8f0;
+      overflow-x: hidden;
+      min-height: 100vh;
+    }
+
+    /* Three.js canvas BG */
+    #bg-canvas {
+      position: fixed;
+      inset: 0;
+      z-index: 0;
+      pointer-events: none;
+      opacity: 0.55;
+    }
+
+    /* Noise texture overlay */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      z-index: 1;
+      pointer-events: none;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.035'/%3E%3C/svg%3E");
+      opacity: 0.4;
+    }
+
+    /* Glassmorphism utility */
+    .glass {
+      background: rgba(26,26,46, 0.6);
+      backdrop-filter: blur(16px) saturate(180%);
+      -webkit-backdrop-filter: blur(16px) saturate(180%);
+      border: 1px solid rgba(255,255,255,0.06);
+    }
+    .glass-light {
+      background: rgba(37,37,64, 0.5);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 1px solid rgba(255,255,255,0.08);
+    }
+    .glass-hover {
+      transition: background 0.2s, border-color 0.2s, box-shadow 0.2s, transform 0.2s;
+    }
+    .glass-hover:hover {
+      background: rgba(45,45,75, 0.7);
+      border-color: rgba(99,102,241,0.35);
+      box-shadow: 0 0 24px rgba(99,102,241,0.2);
+      transform: translateY(-2px);
+    }
+
+    /* Gradient text */
+    .gradient-text {
+      background: linear-gradient(135deg, #818cf8 0%, #06b6d4 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .gradient-text-green {
+      background: linear-gradient(135deg, #10b981 0%, #06b6d4 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .gradient-text-amber {
+      background: linear-gradient(135deg, #f59e0b 0%, #f43f5e 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    /* Skeleton shimmer */
+    .skeleton {
+      background: linear-gradient(90deg, rgba(37,37,64,0.6) 25%, rgba(60,60,100,0.4) 50%, rgba(37,37,64,0.6) 75%);
+      background-size: 200% 100%;
+      animation: shimmer 1.8s infinite;
+    }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 5px; height: 5px; }
+    ::-webkit-scrollbar-track { background: var(--surface-1); }
+    ::-webkit-scrollbar-thumb { background: rgba(99,102,241,0.4); border-radius: 9999px; }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(99,102,241,0.7); }
+
+    /* Score ring */
+    .score-ring { transform-origin: center; transform: rotate(-90deg); }
+
+    /* Badge score color */
+    .score-high   { color: #10b981; text-shadow: 0 0 12px rgba(16,185,129,0.5); }
+    .score-mid    { color: #f59e0b; text-shadow: 0 0 12px rgba(245,158,11,0.5); }
+    .score-low    { color: #f43f5e; text-shadow: 0 0 12px rgba(244,63,94,0.5); }
+
+    /* Glow line separator */
+    .glow-line {
+      height: 1px;
+      background: linear-gradient(90deg, transparent, rgba(99,102,241,0.5), transparent);
+    }
+
+    /* Input / Select dark style */
+    .dark-input {
+      background: rgba(15,15,26,0.8);
+      border: 1px solid rgba(255,255,255,0.08);
+      color: #e2e8f0;
+      border-radius: 0.5rem;
+      padding: 0.4rem 0.75rem;
+      font-size: 0.875rem;
+      transition: border-color 0.2s, box-shadow 0.2s;
+      outline: none;
+      width: 100%;
+    }
+    .dark-input:focus {
+      border-color: rgba(99,102,241,0.6);
+      box-shadow: 0 0 0 3px rgba(99,102,241,0.15);
+    }
+    .dark-input::placeholder { color: rgba(148,163,184,0.4); }
+
+    /* Status badge */
+    .badge-survey  { background:rgba(16,185,129,0.15); color:#10b981; border:1px solid rgba(16,185,129,0.3); }
+    .badge-skip    { background:rgba(244,63,94,0.15);  color:#f43f5e; border:1px solid rgba(244,63,94,0.3); }
+    .badge-pending { background:rgba(148,163,184,0.1); color:#94a3b8; border:1px solid rgba(148,163,184,0.2); }
+    .badge         { display:inline-flex; align-items:center; gap:4px; padding:2px 10px; border-radius:9999px; font-size:0.7rem; font-weight:600; letter-spacing:0.04em; }
+
+    /* Fraud badge */
+    .fraud-high   { background:rgba(244,63,94,0.15);  color:#f43f5e; border:1px solid rgba(244,63,94,0.4); }
+    .fraud-medium { background:rgba(245,158,11,0.15); color:#f59e0b; border:1px solid rgba(245,158,11,0.4); }
+    .fraud-low    { background:rgba(16,185,129,0.15); color:#10b981; border:1px solid rgba(16,185,129,0.4); }
+
+    /* Live pulse dot */
+    .live-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: #10b981;
+      box-shadow: 0 0 0 0 rgba(16,185,129,0.6);
+      animation: livePulse 2s infinite;
+    }
+    @keyframes livePulse {
+      0%   { box-shadow: 0 0 0 0 rgba(16,185,129,0.6); }
+      70%  { box-shadow: 0 0 0 8px rgba(16,185,129,0); }
+      100% { box-shadow: 0 0 0 0 rgba(16,185,129,0); }
+    }
+
+    /* Card row hover */
+    .listing-card {
+      transition: all 0.22s cubic-bezier(0.16,1,0.3,1);
+      cursor: pointer;
+    }
+    .listing-card:hover {
+      background: rgba(45,45,80,0.7) !important;
+      border-color: rgba(99,102,241,0.4) !important;
+      box-shadow: 0 4px 32px rgba(99,102,241,0.18), 0 1px 0 rgba(99,102,241,0.3) inset;
+      transform: translateX(4px);
+    }
+    .listing-card:active { transform: translateX(2px) scale(0.995); }
+
+    /* Btn primary */
+    .btn-primary {
+      background: linear-gradient(135deg, #4f46e5 0%, #06b6d4 100%);
+      color: white;
+      border: none;
+      border-radius: 0.5rem;
+      padding: 0.5rem 1.25rem;
+      font-size: 0.875rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.2s, transform 0.15s, box-shadow 0.2s;
+      box-shadow: 0 4px 15px rgba(79,70,229,0.4);
+      letter-spacing: 0.02em;
+    }
+    .btn-primary:hover  { opacity:0.9; transform:translateY(-1px); box-shadow:0 6px 20px rgba(79,70,229,0.5); }
+    .btn-primary:active { transform:translateY(0); }
+
+    .btn-ghost {
+      background: transparent;
+      border: 1px solid rgba(255,255,255,0.1);
+      color: #94a3b8;
+      border-radius: 0.5rem;
+      padding: 0.5rem 1rem;
+      font-size: 0.8rem;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .btn-ghost:hover { border-color:rgba(99,102,241,0.5); color:#818cf8; background:rgba(99,102,241,0.08); }
+
+    /* Page wrapper — above canvas */
+    #page-wrapper { position: relative; z-index: 10; min-height: 100vh; display: flex; flex-direction: column; }
+
+    /* Responsive table → cards on mobile */
+    @media (max-width: 768px) {
+      .desktop-only { display: none !important; }
+      .mobile-card-view { display: flex !important; }
+    }
+    @media (min-width: 769px) {
+      .mobile-only { display: none !important; }
+    }
+
+    {% block extra_style %}{% endblock %}
+  </style>
 </head>
-<body class="bg-gray-100 text-gray-900">
 
-  <!-- Navbar -->
-  <nav class="bg-indigo-700 text-white px-6 py-3 flex items-center gap-4 shadow">
-    <span class="text-xl font-bold">🔍 God Eye</span>
-    <span class="text-indigo-300 text-sm">Kos Monitor · UBAYA</span>
-    <a href="/dashboard" class="ml-auto text-sm hover:underline">Dashboard</a>
-  </nav>
+<body>
+  <!-- Three.js Particle Canvas -->
+  <canvas id="bg-canvas"></canvas>
 
-  <!-- Content -->
-  <main class="max-w-7xl mx-auto px-4 py-6">
-    {% block content %}{% endblock %}
-  </main>
+  <!-- Page Wrapper -->
+  <div id="page-wrapper">
 
-  <!-- Footer -->
-  <footer class="text-center text-gray-400 text-xs py-4">
-    God Eye v3.1 · god-eye.ikrn.engineer
-  </footer>
+    <!-- Navbar -->
+    <nav class="glass sticky top-0 z-50 px-4 sm:px-6 py-3 flex items-center gap-3 shadow-lg shadow-black/20">
+      <div class="flex items-center gap-2.5">
+        <!-- Eye logo SVG -->
+        <div class="relative w-8 h-8 flex-shrink-0">
+          <svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" class="w-8 h-8">
+            <rect width="32" height="32" rx="8" fill="url(#navGrad)"/>
+            <path d="M4 16C4 16 8 8 16 8C24 8 28 16 28 16C28 16 24 24 16 24C8 24 4 16 4 16Z" stroke="#a5b4fc" stroke-width="1.5" fill="none"/>
+            <circle cx="16" cy="16" r="4" fill="url(#eyeGrad)"/>
+            <circle cx="17.5" cy="14.5" r="1.2" fill="rgba(255,255,255,0.7)"/>
+            <defs>
+              <linearGradient id="navGrad" x1="0" y1="0" x2="32" y2="32">
+                <stop offset="0%" stop-color="#4f46e5"/>
+                <stop offset="100%" stop-color="#06b6d4"/>
+              </linearGradient>
+              <linearGradient id="eyeGrad" x1="12" y1="12" x2="20" y2="20">
+                <stop offset="0%" stop-color="#818cf8"/>
+                <stop offset="100%" stop-color="#06b6d4"/>
+              </linearGradient>
+            </defs>
+          </svg>
+        </div>
+        <div>
+          <span class="text-white font-bold text-base leading-none">God Eye</span>
+          <span class="text-xs text-slate-400 block leading-none mt-0.5 font-mono">v3.1</span>
+        </div>
+      </div>
 
+      <div class="hidden sm:block h-5 w-px bg-white/10 mx-2"></div>
+      <span class="hidden sm:block text-slate-400 text-xs font-mono">Kos Monitor — UBAYA</span>
+
+      <div class="ml-auto flex items-center gap-3">
+        <!-- Live indicator -->
+        <div class="flex items-center gap-1.5 text-xs text-slate-400">
+          <div class="live-dot"></div>
+          <span class="hidden sm:block font-mono">LIVE</span>
+        </div>
+        <a href="/dashboard"
+           class="text-xs text-slate-300 hover:text-white transition-colors font-medium px-3 py-1.5 rounded-md hover:bg-white/5">
+          Dashboard
+        </a>
+      </div>
+    </nav>
+
+    <!-- Content -->
+    <main class="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 py-6">
+      {% block content %}{% endblock %}
+    </main>
+
+    <!-- Footer -->
+    <footer class="relative z-10 py-5 px-6">
+      <div class="glow-line mb-4"></div>
+      <div class="flex flex-col sm:flex-row items-center justify-between gap-2 text-xs text-slate-500">
+        <span class="font-mono">God Eye <span class="text-slate-400">v3.1</span></span>
+        <span class="font-mono text-slate-600">god-eye.ikrn.engineer</span>
+        <span class="font-mono">Kos Monitor · UBAYA</span>
+      </div>
+    </footer>
+
+  </div><!-- /page-wrapper -->
+
+  <!-- Three.js Particle Background -->
+  <script>
+  (function() {
+    const canvas = document.getElementById('bg-canvas');
+    if (!canvas) return;
+
+    let W = canvas.width  = window.innerWidth;
+    let H = canvas.height = window.innerHeight;
+    const ctx = canvas.getContext('2d');
+
+    const COLORS  = ['#6366f1','#818cf8','#06b6d4','#8b5cf6','#a5b4fc'];
+    const N       = Math.min(Math.floor(W * H / 14000), 90);
+    const LINES   = 100; // max connection distance
+
+    const pts = Array.from({ length: N }, () => ({
+      x: Math.random() * W,
+      y: Math.random() * H,
+      vx: (Math.random() - 0.5) * 0.35,
+      vy: (Math.random() - 0.5) * 0.35,
+      r:  Math.random() * 1.5 + 0.8,
+      c:  COLORS[Math.floor(Math.random() * COLORS.length)],
+    }));
+
+    function draw() {
+      ctx.clearRect(0, 0, W, H);
+
+      // Lines
+      for (let i = 0; i < N; i++) {
+        for (let j = i + 1; j < N; j++) {
+          const dx = pts[i].x - pts[j].x;
+          const dy = pts[i].y - pts[j].y;
+          const d  = Math.sqrt(dx*dx + dy*dy);
+          if (d < LINES) {
+            ctx.beginPath();
+            ctx.moveTo(pts[i].x, pts[i].y);
+            ctx.lineTo(pts[j].x, pts[j].y);
+            ctx.strokeStyle = `rgba(99,102,241,${(1 - d/LINES) * 0.15})`;
+            ctx.lineWidth = 0.6;
+            ctx.stroke();
+          }
+        }
+      }
+
+      // Dots
+      pts.forEach(p => {
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+        ctx.fillStyle = p.c;
+        ctx.globalAlpha = 0.55;
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      });
+    }
+
+    function tick() {
+      pts.forEach(p => {
+        p.x += p.vx; p.y += p.vy;
+        if (p.x < 0 || p.x > W) p.vx *= -1;
+        if (p.y < 0 || p.y > H) p.vy *= -1;
+      });
+      draw();
+      requestAnimationFrame(tick);
+    }
+
+    tick();
+
+    window.addEventListener('resize', () => {
+      W = canvas.width  = window.innerWidth;
+      H = canvas.height = window.innerHeight;
+    });
+  })();
+  </script>
+
+  {% block extra_scripts %}{% endblock %}
 </body>
 </html>
