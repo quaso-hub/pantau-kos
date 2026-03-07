@@ -103,9 +103,15 @@ class AIGateway(ABC):
         self,
         prompt: str,
         image_bytes: Optional[bytes] = None,
+        system_prompt: Optional[str] = None,
+        use_grounding: bool = True,
+        use_thinking: bool = True,
     ) -> dict | str:
         """
         Send prompt (+ optional image) to the AI service.
+        - system_prompt: override default system instruction per-call (for multi-agent)
+        - use_grounding: enable Google Search grounding (Gemini only)
+        - use_thinking: enable thinking_level=high (Gemini only)
         Return parsed dict (Gemini) or raw string (DeepSeek).
         """
         ...

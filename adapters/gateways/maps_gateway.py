@@ -70,7 +70,18 @@ class GoogleMapsGateway(MapsGateway):
                         "language": "id",
                     },
                 )
-                results = r.json().get("results", [])
+                data = r.json()
+                status = data.get("status", "UNKNOWN")
+                if status != "OK":
+                    log.error(
+                        "Maps Geocode FAILED | status=%s | error_message=%s | address=%r | "
+                        "hint: check API key, billing, or Geocoding API enabled",
+                        status,
+                        data.get("error_message", "(none)"),
+                        address,
+                    )
+                    return None
+                results = data.get("results", [])
                 if results:
                     loc = results[0]["geometry"]["location"]
                     return {
@@ -79,7 +90,11 @@ class GoogleMapsGateway(MapsGateway):
                         "formatted": results[0]["formatted_address"],
                     }
         except Exception as exc:
-            log.warning("Geocode error: %s", exc)
+            log.error(
+                "Maps Geocode EXCEPTION | type=%s | detail=%s",
+                type(exc).__name__,
+                repr(exc),
+            )
         return None
 
     # ── Full parallel lookup ───────────────────────────────────────────────

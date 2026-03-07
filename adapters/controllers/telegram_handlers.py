@@ -1,12 +1,13 @@
 """
-adapters/controllers/telegram_handlers.py  (v4.0)
+adapters/controllers/telegram_handlers.py  (v4.1)
 
 Thin PTB handler functions — delegate all business logic to the service layer.
 Each handler:
   1. Extracts input from Update/Context
-  2. Gets the Container from bot_data
-  3. Calls the appropriate service
-  4. Formats and sends the response
+  2. Guards against duplicate processing via idempotency cache
+  3. Gets the Container from bot_data
+  4. Calls the appropriate service
+  5. Formats and sends the response
 
 Architecture note:
   Container is stored in application.bot_data["container"] and injected
@@ -47,6 +48,25 @@ STATE_CONFIRM = 2
 _settings_ratelimit: dict[int, list[float]] = {}
 _RATELIMIT_WINDOW = 60.0
 _RATELIMIT_MAX_CALLS = 3
+
+# ── Idempotency cache — prevent duplicate update processing ──────────────────
+# Maps update_id → timestamp of first seen. TTL = 5 minutes.
+_processed_updates: dict[int, float] = {}
+_IDEMPOTENCY_TTL = 300.0  # seconds
+
+
+def _is_duplicate_update(update_id: int) -> bool:
+    """Return True if this update_id was already processed (idempotency guard)."""
+    now = time.monotonic()
+    # Evict expired entries to keep memory bounded
+    expired = [uid for uid, ts in _processed_updates.items() if now - ts > _IDEMPOTENCY_TTL]
+    for uid in expired:
+        del _processed_updates[uid]
+    if update_id in _processed_updates:
+        log.warning("Duplicate update_id=%s — skipping", update_id)
+        return True
+    _processed_updates[update_id] = now
+    return False
 
 
 def _get_container(context: CallbackContext) -> Container:
@@ -258,6 +278,10 @@ async def handle_message(
     context: ContextTypes.DEFAULT_TYPE,
     allowed_chat_id: int,
 ) -> None:
+    # ── Idempotency guard ──────────────────────────────────────────────────
+    if update.update_id and _is_duplicate_update(update.update_id):
+        return
+
     msg = update.message
     if not msg:
         return
@@ -306,6 +330,10 @@ async def handle_callback_query(
     context: ContextTypes.DEFAULT_TYPE,
     allowed_chat_id: int,
 ) -> None:
+    # ── Idempotency guard ──────────────────────────────────────────────────
+    if update.update_id and _is_duplicate_update(update.update_id):
+        return
+
     query = update.callback_query
     if not query:
         return

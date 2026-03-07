@@ -88,7 +88,13 @@ Kembalikan JSON murni tanpa markdown:
 
 
 class GeminiGateway(AIGateway):
-    """Concrete Gemini Vision adapter."""
+    """
+    Concrete Gemini Vision adapter.
+
+    Supports per-call system_prompt override so multi-agent pipeline
+    can pass Agent1/Agent4-specific instructions without a separate gateway.
+    Falls back to the module-level SYSTEM_PROMPT if none provided.
+    """
 
     def __init__(self, config: GeminiConfig) -> None:
         self._model = config.model
@@ -98,6 +104,9 @@ class GeminiGateway(AIGateway):
         self,
         prompt: str,
         image_bytes: Optional[bytes] = None,
+        system_prompt: Optional[str] = None,
+        use_grounding: bool = True,
+        use_thinking: bool = True,
     ) -> dict | str:
         parts: list = []
         if image_bytes:
@@ -109,12 +118,20 @@ class GeminiGateway(AIGateway):
             parts.append(types.Part.from_bytes(data=image_bytes, mime_type=mime))
         parts.append(types.Part.from_text(text=prompt))
 
-        config = types.GenerateContentConfig(
-            system_instruction=SYSTEM_PROMPT,
-            tools=[types.Tool(google_search=types.GoogleSearch())],
-            thinking_config=types.ThinkingConfig(thinking_level="high"),
-            response_mime_type="application/json",
-        )
+        effective_system = system_prompt or SYSTEM_PROMPT
+        tools = [types.Tool(google_search=types.GoogleSearch())] if use_grounding else []
+        thinking = types.ThinkingConfig(thinking_level="high") if use_thinking else None
+
+        cfg_kwargs: dict = {
+            "system_instruction": effective_system,
+            "response_mime_type": "application/json",
+        }
+        if tools:
+            cfg_kwargs["tools"] = tools
+        if thinking:
+            cfg_kwargs["thinking_config"] = thinking
+
+        gen_config = types.GenerateContentConfig(**cfg_kwargs)
 
         last_exc: Exception | None = None
         for attempt in range(3):
@@ -123,7 +140,7 @@ class GeminiGateway(AIGateway):
                     lambda: self._client.models.generate_content(
                         model=self._model,
                         contents=[types.Content(role="user", parts=parts)],
-                        config=config,
+                        config=gen_config,
                     )
                 )
                 raw_text = getattr(resp, "text", "") or ""
@@ -135,8 +152,19 @@ class GeminiGateway(AIGateway):
             except Exception as exc:
                 last_exc = exc
                 wait = 2 ** attempt
-                log.warning("Gemini attempt %d failed: %s. Retry in %ds", attempt + 1, exc, wait)
+                log.warning(
+                    "Gemini attempt %d/%d FAILED | type=%s | detail=%s | retry_in=%ds",
+                    attempt + 1, 3,
+                    type(exc).__name__,
+                    repr(exc),
+                    wait,
+                )
                 await asyncio.sleep(wait)
 
-        log.error("Gemini failed after 3 attempts: %s", last_exc)
-        return {"error": str(last_exc)[:200]}
+        log.error(
+            "Gemini EXHAUSTED 3 attempts | model=%s | last_error=%s | detail=%s",
+            self._model,
+            type(last_exc).__name__,
+            repr(last_exc),
+        )
+        return {"error": str(last_exc)[:400]}

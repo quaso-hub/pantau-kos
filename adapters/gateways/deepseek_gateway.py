@@ -32,12 +32,20 @@ class DeepSeekGateway(AIGateway):
         self,
         prompt: str,
         image_bytes: Optional[bytes] = None,  # DeepSeek is text-only; ignored
+        system_prompt: Optional[str] = None,   # Injected into messages[0] as system role
+        use_grounding: bool = True,            # Not applicable for DeepSeek
+        use_thinking: bool = True,             # Not applicable for DeepSeek
     ) -> dict | str:
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+
         payload = {
             "model": self._model,
             "temperature": 0,
             "max_tokens": 1500,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": messages,
         }
 
         last_exc: Exception | None = None
@@ -50,8 +58,19 @@ class DeepSeekGateway(AIGateway):
             except Exception as exc:
                 last_exc = exc
                 wait = 2 ** attempt
-                log.warning("DeepSeek attempt %d failed: %s. Retry in %ds", attempt + 1, exc, wait)
+                log.warning(
+                    "DeepSeek attempt %d/%d FAILED | type=%s | detail=%s | retry_in=%ds",
+                    attempt + 1, 3,
+                    type(exc).__name__,
+                    repr(exc),
+                    wait,
+                )
                 await asyncio.sleep(wait)
 
-        log.error("DeepSeek failed after 3 attempts: %s", last_exc)
-        return f"[DeepSeek error: {str(last_exc)[:200]}]"
+        log.error(
+            "DeepSeek EXHAUSTED 3 attempts | model=%s | last_error=%s | detail=%s",
+            self._model,
+            type(last_exc).__name__,
+            repr(last_exc),
+        )
+        return f"[DeepSeek error: {str(last_exc)[:400]}]"
