@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+{% block title %}Dashboard · God Eye{% endblock %}
+
+{% block content %}
+
+<!-- Stats header -->
+<div class="grid grid-cols-3 gap-4 mb-6">
+  <div class="bg-white rounded-xl shadow p-4 text-center">
+    <p class="text-3xl font-bold text-indigo-600">{{ stats.total }}</p>
+    <p class="text-gray-500 text-sm mt-1">Total Listing</p>
+  </div>
+  <div class="bg-white rounded-xl shadow p-4 text-center">
+    <p class="text-3xl font-bold text-green-600">{{ stats.avg_score }}</p>
+    <p class="text-gray-500 text-sm mt-1">Rata-rata Score</p>
+  </div>
+  <div class="bg-white rounded-xl shadow p-4 text-center">
+    <p class="text-3xl font-bold text-blue-600">{{ stats.surveyed }}</p>
+    <p class="text-gray-500 text-sm mt-1">Mau Survey</p>
+  </div>
+</div>
+
+<!-- Filter bar -->
+<form method="get" class="bg-white rounded-xl shadow p-4 mb-6 flex flex-wrap gap-3 items-end">
+  <div>
+    <label class="block text-xs text-gray-500 mb-1">Harga Min (Rp)</label>
+    <input name="price_min" type="number" value="{{ filters.price_min or '' }}"
+           class="border rounded px-2 py-1 text-sm w-32" placeholder="300000" />
+  </div>
+  <div>
+    <label class="block text-xs text-gray-500 mb-1">Harga Max (Rp)</label>
+    <input name="price_max" type="number" value="{{ filters.price_max or '' }}"
+           class="border rounded px-2 py-1 text-sm w-32" placeholder="750000" />
+  </div>
+  <div>
+    <label class="block text-xs text-gray-500 mb-1">Jarak Max (km)</label>
+    <input name="dist_max" type="number" step="0.5" value="{{ filters.dist_max or '' }}"
+           class="border rounded px-2 py-1 text-sm w-24" placeholder="15" />
+  </div>
+  <div>
+    <label class="block text-xs text-gray-500 mb-1">Area</label>
+    <input name="area" type="text" value="{{ filters.area }}"
+           class="border rounded px-2 py-1 text-sm w-36" placeholder="Wonocolo" />
+  </div>
+  <div>
+    <label class="block text-xs text-gray-500 mb-1">Status</label>
+    <select name="status" class="border rounded px-2 py-1 text-sm">
+      <option value="">Semua</option>
+      <option value="pending"  {% if filters.status == 'pending'  %}selected{% endif %}>Pending</option>
+      <option value="survey"   {% if filters.status == 'survey'   %}selected{% endif %}>Mau Survey</option>
+      <option value="skip"     {% if filters.status == 'skip'     %}selected{% endif %}>Skip</option>
+    </select>
+  </div>
+  <div>
+    <label class="block text-xs text-gray-500 mb-1">Urutkan</label>
+    <select name="sort" class="border rounded px-2 py-1 text-sm">
+      <option value="score"    {% if sort_by == 'score'    %}selected{% endif %}>Score ↓</option>
+      <option value="date"     {% if sort_by == 'date'     %}selected{% endif %}>Tanggal ↓</option>
+      <option value="price"    {% if sort_by == 'price'    %}selected{% endif %}>Harga ↑</option>
+      <option value="distance" {% if sort_by == 'distance' %}selected{% endif %}>Jarak ↑</option>
+    </select>
+  </div>
+  <button type="submit"
+          class="bg-indigo-600 text-white px-4 py-1.5 rounded text-sm hover:bg-indigo-700">
+    Filter
+  </button>
+  <a href="/dashboard" class="text-sm text-gray-400 hover:underline self-center">Reset</a>
+</form>
+
+<!-- Listing table -->
+{% if listings %}
+<div class="bg-white rounded-xl shadow overflow-x-auto">
+  <table class="min-w-full text-sm">
+    <thead class="bg-gray-50 text-gray-600 uppercase text-xs">
+      <tr>
+        <th class="px-4 py-3 text-left">Score</th>
+        <th class="px-4 py-3 text-left">Harga</th>
+        <th class="px-4 py-3 text-left">Jarak</th>
+        <th class="px-4 py-3 text-left">Area</th>
+        <th class="px-4 py-3 text-left">Sumber</th>
+        <th class="px-4 py-3 text-left">Status</th>
+        <th class="px-4 py-3 text-left">Tanggal</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-gray-100">
+      {% for l in listings %}
+      <tr class="hover:bg-indigo-50 cursor-pointer"
+          onclick="window.location='/dashboard/{{ l.id }}'">
+        <td class="px-4 py-3 font-bold
+          {% if l.score >= 80 %}text-green-600
+          {% elif l.score >= 60 %}text-yellow-600
+          {% else %}text-red-500{% endif %}">
+          {{ l.score }}/100
+        </td>
+        <td class="px-4 py-3">Rp {{ "{:,}".format(l.price or 0) }}</td>
+        <td class="px-4 py-3">{{ l.distance_km or '-' }} km</td>
+        <td class="px-4 py-3">{{ l.area or '-' }}</td>
+        <td class="px-4 py-3 uppercase text-xs text-gray-500">{{ l.source or '-' }}</td>
+        <td class="px-4 py-3">
+          {% if l.status == 'survey' %}
+            <span class="bg-green-100 text-green-700 px-2 py-0.5 rounded-full text-xs">Survey</span>
+          {% elif l.status == 'skip' %}
+            <span class="bg-red-100 text-red-600 px-2 py-0.5 rounded-full text-xs">Skip</span>
+          {% else %}
+            <span class="bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full text-xs">Pending</span>
+          {% endif %}
+        </td>
+        <td class="px-4 py-3 text-gray-400 text-xs">{{ l.timestamp or '-' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="bg-white rounded-xl shadow p-12 text-center text-gray-400">
+  <p class="text-4xl mb-3">📭</p>
+  <p>Belum ada listing. Bot akan otomatis mengisi saat menerima data dari n8n.</p>
+</div>
+{% endif %}
+
+{% endblock %}

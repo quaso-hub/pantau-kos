@@ -23,6 +23,7 @@ from typing import Optional
 import httpx
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
+from telegram.error import BadRequest as TgBadRequest
 from telegram.ext import CallbackContext, ContextTypes, ConversationHandler
 
 from adapters.controllers.formatter import (
@@ -111,12 +112,18 @@ async def _run_analysis_with_progress(
                 await session_repo.clear(chat_id)
                 return
 
-            await bot.edit_message_text(
-                text=format_loading(step, 5, f"{tag}: {label}", spinner),
-                chat_id=chat_id,
-                message_id=msg_id,
-                parse_mode=ParseMode.MARKDOWN_V2,
-            )
+            try:
+                await bot.edit_message_text(
+                    text=format_loading(step, 5, f"{tag}: {label}", spinner),
+                    chat_id=chat_id,
+                    message_id=msg_id,
+                    parse_mode=ParseMode.MARKDOWN_V2,
+                )
+            except TgBadRequest as e:
+                if "message is not modified" in str(e).lower():
+                    pass  # identical content — safe to ignore
+                else:
+                    raise
             spinner = (spinner + 1) % 4
 
             if step == 3:
@@ -165,6 +172,33 @@ async def _run_analysis_with_progress(
                 disable_web_page_preview=True,
             )
 
+        await session_repo.clear(chat_id)
+
+    except TgBadRequest as exc:
+        # Silently ignore "Message is not modified" — it's a Telegram API quirk,
+        # not a real error. All other BadRequest errors still bubble up.
+        if "message is not modified" in str(exc).lower():
+            log.debug("Skipped duplicate edit for chat_id=%s", chat_id)
+            await session_repo.clear(chat_id)
+            return
+        log.error("Telegram BadRequest for chat_id=%s: %s", chat_id, exc, exc_info=True)
+        err_text = (
+            "*\\[ERROR\\]*\n"
+            f"`code: {escape_md(type(exc).__name__)}`\n"
+            f"`msg:  {escape_md(str(exc)[:200])}`"
+        )
+        try:
+            if msg_id:
+                await bot.edit_message_text(
+                    err_text,
+                    chat_id=chat_id,
+                    message_id=msg_id,
+                    parse_mode=ParseMode.MARKDOWN_V2,
+                )
+            else:
+                await bot.send_message(chat_id=chat_id, text=err_text, parse_mode=ParseMode.MARKDOWN_V2)
+        except Exception as send_exc:
+            log.error("Failed to deliver error message: %s", send_exc)
         await session_repo.clear(chat_id)
 
     except Exception as exc:
