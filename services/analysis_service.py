@@ -457,7 +457,7 @@ class AnalysisService:
             "=== PREFERENSI USER ===\n"
             f"Budget max: Rp{prefs.max_price:,}\n"
             f"Area favorit: {', '.join(prefs.preferred_areas) or 'belum ada'}\n"
-            f"Radius max ke UBAYA: {prefs.max_radius_km} km\n\n"
+            f"Radius max ke UBAYA: {prefs.max_distance_km} km\n\n"
             "Lakukan analisis forensik lengkap. Kembalikan JSON sesuai schema."
         )
 
