@@ -49,77 +49,73 @@ _settings_ratelimit: dict[int, list[float]] = {}
 _RATELIMIT_WINDOW = 60.0
 _RATELIMIT_MAX_CALLS = 3
 
-# ── Idempotency + In-Flight Analysis Lock ────────────────────────────────────
+# ── Per-chat analysis lock + update-id idempotency ───────────────────────────
 #
-# Two-level guard:
-#   Level 1 — _processed_updates: dict[update_id, timestamp]
-#     Prevents the same Telegram update_id from being dispatched more than
-#     once.  Telegram retries after ~60 s if it never gets HTTP 200, so this
-#     stops the 3-4x duplicate burst.
+# ROOT CAUSE of duplicate analyses:
+#   Telegram retries do NOT always use the same update_id.
+#   A single user message can produce retries with DIFFERENT update_ids
+#   when Telegram doesn't receive HTTP 200 fast enough.
+#   Per-update_id dedup is therefore insufficient.
 #
-#   Level 2 — _active_analyses: dict[update_id, asyncio.Task]
-#     Tracks the in-flight background Task spawned by handle_message.
-#     If a retry slips through Level 1 (race between threads), the Task check
-#     ensures we never spawn two concurrent analyses for the same update.
-#     The Task is cleaned up via its own done-callback.
+# CORRECT APPROACH: per-chat_id lock
+#   If chat_id already has an analysis in-flight → drop all new messages
+#   until the current analysis finishes (or times out).
 #
-# Usage flow:
-#   _claim_update(uid) → True  = "I own this, proceed"
-#   _claim_update(uid) → False = "already owned/processing, drop"
-#   _release_update(uid)       = called from Task done-callback on finish
+# Secondary: per-update_id dedup (still useful when same update_id IS retried)
 
+# Per-chat asyncio.Lock — only one analysis per chat at a time
+_chat_locks: dict[int, asyncio.Lock] = {}
+
+# Per-update_id dedup — catches identical update_id retries (secondary guard)
 _processed_updates: dict[int, float] = {}
-_active_analyses:   dict[int, "asyncio.Task[None]"] = {}
-_IDEMPOTENCY_TTL = 300.0  # 5 min — eviction window
+_IDEMPOTENCY_TTL = 300.0  # 5 min eviction window
+
+# Track which chat_ids currently have an analysis running
+_chat_busy: set[int] = set()
+
+
+def _get_chat_lock(chat_id: int) -> asyncio.Lock:
+    """Return (creating if needed) the asyncio.Lock for this chat_id."""
+    if chat_id not in _chat_locks:
+        _chat_locks[chat_id] = asyncio.Lock()
+    return _chat_locks[chat_id]
+
+
+def _is_chat_busy(chat_id: int) -> bool:
+    """True if chat_id already has an analysis task running."""
+    return chat_id in _chat_busy
+
+
+def _mark_chat_busy(chat_id: int) -> None:
+    _chat_busy.add(chat_id)
+
+
+def _mark_chat_free(chat_id: int) -> None:
+    _chat_busy.discard(chat_id)
 
 
 def _claim_update(update_id: int) -> bool:
     """
-    Atomically claim an update_id for processing.
-
-    Returns True  → caller is the sole owner; safe to spawn a Task.
-    Returns False → duplicate or already in-flight; caller must drop silently.
+    Per-update_id dedup (secondary guard for identical-id retries).
+    Returns True → first time seen, proceed.
+    Returns False → already seen, drop.
     """
     now = time.monotonic()
-
-    # Evict stale entries (finished but old) from processed set
     stale = [uid for uid, ts in _processed_updates.items() if now - ts > _IDEMPOTENCY_TTL]
     for uid in stale:
         del _processed_updates[uid]
-
-    # Level 1: already seen this update_id?
     if update_id in _processed_updates:
         log.warning("Idempotency: duplicate update_id=%s — dropped", update_id)
         return False
-
-    # Level 2: Task still running (race condition between PTB threads)?
-    existing_task = _active_analyses.get(update_id)
-    if existing_task is not None and not existing_task.done():
-        log.warning("In-flight lock: update_id=%s task still running — dropped", update_id)
-        return False
-
-    # Register ownership
     _processed_updates[update_id] = now
     return True
 
 
-def _release_update(update_id: int) -> None:
-    """Remove the in-flight Task entry once it completes (called via done-callback)."""
-    _active_analyses.pop(update_id, None)
-
-
-# Backward-compat alias used by handle_callback_query (lightweight, no Task)
+# Alias for non-analysis handlers (callbacks/commands)
 def _is_duplicate_update(update_id: int) -> bool:
-    """Simple Level-1 dedup for non-analysis updates (callbacks, commands)."""
-    now = time.monotonic()
-    stale = [uid for uid, ts in _processed_updates.items() if now - ts > _IDEMPOTENCY_TTL]
-    for uid in stale:
-        del _processed_updates[uid]
-    if update_id in _processed_updates:
-        log.warning("Duplicate callback update_id=%s — dropped", update_id)
-        return True
-    _processed_updates[update_id] = now
-    return False
+    return not _claim_update(update_id)
+
+
 
 
 
@@ -335,89 +331,101 @@ async def handle_message(
     """
     PTB entry-point for all user messages.
 
-    CRITICAL PATH — must return to PTB in < 1 s so the next update can be
-    dequeued before Telegram's webhook timeout fires.
+    CRITICAL PATH — must return to PTB in milliseconds so the next update
+    can be dequeued before Telegram's webhook timeout fires a retry.
+
+    Duplicate-suppression strategy (two guards, innermost wins):
+      Guard 1 — per-update_id dedup: drops retries with identical update_id.
+      Guard 2 — per-chat_id busy flag: drops retries with different update_ids
+                for the same chat while an analysis is already running.
+                This is the PRIMARY guard that stops the 3× spam in the screenshot.
 
     Flow:
-      1. Idempotency claim  → drop duplicates instantly
-      2. Auth + input parse  → cheap synchronous work only
-      3. asyncio.create_task → hand heavy analysis to background
-      4. return              → PTB marks handler done; Flask already sent 200
+      1. Guard 1 check  → drop identical-id retries
+      2. Guard 2 check  → drop if chat already busy
+      3. Mark chat busy
+      4. Download image (fast, Telegram CDN, <1 s)
+      5. asyncio.create_task(_run_analysis_with_progress)
+      6. return immediately
     """
     update_id = update.update_id
 
-    # ── Level-1 + Level-2 atomic claim ────────────────────────────────────
+    # Guard 1 — per-update_id (catches Telegram sending exact same update_id)
     if not _claim_update(update_id):
-        return  # duplicate burst from Telegram retry — silently ignore
+        return
 
     msg = update.message
     if not msg:
-        _release_update(update_id)
         return
     if msg.chat_id != allowed_chat_id:
         await msg.reply_text("Access denied.")
-        _release_update(update_id)
         return
+
+    chat_id = allowed_chat_id
+
+    # Guard 2 — per-chat busy flag (PRIMARY: catches different-update_id retries)
+    if _is_chat_busy(chat_id):
+        log.warning(
+            "Chat %s busy: dropping update_id=%s (analysis already running)",
+            chat_id, update_id,
+        )
+        return
+
+    # Mark this chat as busy BEFORE any await — no concurrency gap
+    _mark_chat_busy(chat_id)
 
     container = _get_container(context)
     text = msg.text or msg.caption or ""
     image_bytes: Optional[bytes] = None
 
-    # Image download is fast (Telegram CDN) — do it here before task spawn
+    # Image download is cheap (Telegram CDN) — do it here, not in the Task
     if msg.photo:
         image_bytes = await _download_photo(context.bot, msg.photo[-1].file_id)
-    elif msg.document and msg.document.mime_type and msg.document.mime_type.startswith("image/"):
+    elif (msg.document
+          and msg.document.mime_type
+          and msg.document.mime_type.startswith("image/")):
         image_bytes = await _download_photo(context.bot, msg.document.file_id)
 
     if not text and not image_bytes:
         await context.bot.send_message(
-            chat_id=allowed_chat_id,
+            chat_id=chat_id,
             text=(
                 "*\\[SYSTEM\\]*\n"
                 "Send listing text, a URL, a room photo, or a screenshot\\."
             ),
             parse_mode=ParseMode.MARKDOWN_V2,
         )
-        _release_update(update_id)
+        _mark_chat_free(chat_id)   # nothing to analyse — unlock immediately
         return
 
     links = re.findall(r"https?://[^\s]+", text)
     source_link = links[0] if links else ""
 
-    # ── Fire background Task — handler returns immediately ─────────────────
-    task = asyncio.create_task(
-        _run_analysis_with_progress(
-            bot=context.bot,
-            chat_id=allowed_chat_id,
-            text=text,
-            image_bytes=image_bytes,
-            source_link=source_link,
-            source="manual",
-            container=container,
-        ),
-        name=f"analysis-uid{update_id}",
-    )
-
-    # Register in-flight task so concurrent retries are blocked
-    _active_analyses[update_id] = task
-
-    # Cleanup + log when task finishes (success or exception)
-    def _on_done(t: "asyncio.Task[None]") -> None:
-        _release_update(update_id)
-        if t.cancelled():
-            log.warning("Analysis task cancelled: update_id=%s", update_id)
-        elif t.exception():
-            log.error(
-                "Analysis task raised unhandled exception: update_id=%s — %s",
-                update_id,
-                t.exception(),
-                exc_info=t.exception(),
+    # ── Spawn background Task — handler returns immediately after this ──────
+    async def _analysis_task() -> None:
+        try:
+            await _run_analysis_with_progress(
+                bot=context.bot,
+                chat_id=chat_id,
+                text=text,
+                image_bytes=image_bytes,
+                source_link=source_link,
+                source="manual",
+                container=container,
             )
-        else:
-            log.info("Analysis task finished cleanly: update_id=%s", update_id)
+        finally:
+            # Always release the lock — even on exception or cancellation
+            _mark_chat_free(chat_id)
+            log.info("Chat %s unlocked after analysis (update_id=%s)", chat_id, update_id)
 
-    task.add_done_callback(_on_done)
-    # Handler returns here — PTB is free to process the next update immediately
+    task = asyncio.create_task(_analysis_task(), name=f"analysis-chat{chat_id}-uid{update_id}")
+    log.info(
+        "Analysis task spawned: chat_id=%s update_id=%s task=%s",
+        chat_id, update_id, task.get_name(),
+    )
+    # Handler returns here — PTB immediately processes the next queued update
+
+
 
 
 
