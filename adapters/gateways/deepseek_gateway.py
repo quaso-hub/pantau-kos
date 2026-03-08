@@ -35,6 +35,7 @@ class DeepSeekGateway(AIGateway):
         system_prompt: Optional[str] = None,   # Injected into messages[0] as system role
         use_grounding: bool = True,            # Not applicable for DeepSeek
         use_thinking: bool = True,             # Not applicable for DeepSeek
+        json_schema: Optional[dict] = None,    # Not applicable for DeepSeek
     ) -> dict | str:
         messages = []
         if system_prompt:

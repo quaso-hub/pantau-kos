@@ -14,9 +14,31 @@ def extract_phone(text: str) -> list[str]:
 
 
 def extract_price(text: str) -> list[str]:
-    return re.findall(
-        r'[Rr][pP]\.?\s?[\d.,]+(?:\s?[Jj][Tt][Aa]?)?(?:\s?[Kk])?', text
-    )
+    """
+    Extract price patterns from Indonesian kos listing text.
+    Handles: Rp950.000, Rp 1.200.000, 950rb, 1.2jt, 1juta, 950ribu, etc.
+    """
+    patterns = [
+        # Rp prefix: Rp950.000, Rp 1.200.000, Rp1,5jt
+        r'[Rr][pP]\.?\s?[\d.,]+(?:\s?(?:[Jj][Tt][Aa]?|[Kk]|[Rr][Bb]|[Rr][Ii][Bb][Uu]|[Jj][Uu][Tt][Aa]))?',
+        # Number + rb/ribu suffix: 950rb, 950 ribu
+        r'\b\d[\d.,]*\s?(?:[Rr][Bb]|[Rr][Ii][Bb][Uu])(?:/(?:bulan|bln|month|bul))?\b',
+        # Number + jt/juta suffix: 1.2jt, 1juta, 1,5 juta
+        r'\b\d[\d.,]*\s?(?:[Jj][Tt][Aa]?|[Jj][Uu][Tt][Aa])(?:/(?:bulan|bln|month|bul))?\b',
+    ]
+    results = []
+    for pat in patterns:
+        matches = re.findall(pat, text)
+        results.extend(matches)
+    # Deduplicate while preserving order
+    seen = set()
+    unique = []
+    for m in results:
+        m_clean = m.strip()
+        if m_clean and m_clean not in seen:
+            seen.add(m_clean)
+            unique.append(m_clean)
+    return unique
 
 
 def extract_links(text: str) -> list[str]:
@@ -24,20 +46,29 @@ def extract_links(text: str) -> list[str]:
 
 
 def parse_price_value(price_str: str) -> Optional[float]:
-    """Parse Rp price string to float. Return None on failure."""
+    """Parse Indonesian price string to float. Handles Rp, rb/ribu, jt/juta."""
+    if not price_str:
+        return None
+    lower = price_str.lower()
     nums = re.findall(r'[\d.,]+', price_str)
     if not nums:
         return None
     try:
-        val_str = nums[0].replace(".", "").replace(",", "")
+        val_str = nums[0].replace(".", "").replace(",", ".")
         val = float(val_str)
-        if val < 10:
-            val *= 1_000_000
-        elif val < 10_000:
-            val *= 1_000
-        if "jt" in price_str.lower() or "juta" in price_str.lower():
+        # Explicit suffix multipliers
+        if "jt" in lower or "juta" in lower:
             if val < 100:
                 val *= 1_000_000
+        elif "rb" in lower or "ribu" in lower:
+            if val < 10_000:
+                val *= 1_000
+        else:
+            # No suffix — heuristic
+            if val < 10:
+                val *= 1_000_000
+            elif val < 10_000:
+                val *= 1_000
         return val
     except Exception:
         return None

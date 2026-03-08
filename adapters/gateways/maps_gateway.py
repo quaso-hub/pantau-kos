@@ -1,13 +1,19 @@
 """
-adapters/gateways/maps_gateway.py
+adapters/gateways/maps_gateway.py  (v5.0)
 Concrete Google Maps implementation of MapsGateway.
-Preserves: Geocoding, Routes API v2, Places API (New), Air Quality, Address Validation.
-All parallel via asyncio.gather().
+
+v5.0 enhancements:
+  - tenacity retries with exponential backoff + jitter on all API calls
+  - Circuit breaker: 3 consecutive failures → open circuit → instant fallback
+  - In-memory LRU cache for geocoding (results rarely change, saves API quota)
+  - All parallel via asyncio.gather()
 """
 from __future__ import annotations
 
 import asyncio
 import logging
+import time
+from collections import OrderedDict
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -34,6 +40,70 @@ _TRAVEL_SCENARIOS = [
 _PLACE_TYPES = ["supermarket", "hospital", "police", "atm", "mosque", "laundry"]
 
 
+# ── Circuit Breaker ──────────────────────────────────────────────────────────
+
+class CircuitBreaker:
+    """Simple circuit breaker: opens after N consecutive failures, resets after cooldown."""
+
+    def __init__(self, failure_threshold: int = 3, cooldown_seconds: float = 60.0):
+        self._threshold = failure_threshold
+        self._cooldown = cooldown_seconds
+        self._failures = 0
+        self._opened_at: Optional[float] = None
+
+    @property
+    def is_open(self) -> bool:
+        if self._opened_at is None:
+            return False
+        if time.monotonic() - self._opened_at > self._cooldown:
+            # Half-open: allow one attempt
+            self._opened_at = None
+            self._failures = 0
+            log.info("Circuit breaker half-open — allowing retry")
+            return False
+        return True
+
+    def record_success(self) -> None:
+        self._failures = 0
+        self._opened_at = None
+
+    def record_failure(self) -> None:
+        self._failures += 1
+        if self._failures >= self._threshold:
+            self._opened_at = time.monotonic()
+            log.error(
+                "Circuit breaker OPENED after %d consecutive failures (cooldown=%.0fs)",
+                self._failures, self._cooldown,
+            )
+
+
+# ── In-Memory LRU Cache ─────────────────────────────────────────────────────
+
+class LRUCache:
+    """Simple async-safe LRU cache with TTL."""
+
+    def __init__(self, maxsize: int = 128, ttl_seconds: float = 3600.0):
+        self._cache: OrderedDict[str, tuple[float, any]] = OrderedDict()
+        self._maxsize = maxsize
+        self._ttl = ttl_seconds
+
+    def get(self, key: str) -> Optional[any]:
+        if key not in self._cache:
+            return None
+        ts, val = self._cache[key]
+        if time.monotonic() - ts > self._ttl:
+            del self._cache[key]
+            return None
+        self._cache.move_to_end(key)
+        return val
+
+    def set(self, key: str, value: any) -> None:
+        self._cache[key] = (time.monotonic(), value)
+        self._cache.move_to_end(key)
+        while len(self._cache) > self._maxsize:
+            self._cache.popitem(last=False)
+
+
 def _next_weekday_departure(hour: int, minute: int) -> str:
     wib = timedelta(hours=7)
     now_wib = datetime.now(timezone.utc) + wib
@@ -50,29 +120,47 @@ def _next_weekday_departure(hour: int, minute: int) -> str:
 
 
 class GoogleMapsGateway(MapsGateway):
-    """Concrete Google Maps adapter."""
+    """Concrete Google Maps adapter with circuit breaker + geocode cache."""
 
     def __init__(self, config: MapsConfig) -> None:
         self._key = config.api_key
         self._ubaya_lat = config.ubaya_lat
         self._ubaya_lng = config.ubaya_lng
+        # Circuit breaker: open after 3 consecutive failures, cooldown 60s
+        self._circuit = CircuitBreaker(failure_threshold=3, cooldown_seconds=60.0)
+        # Geocode cache: 128 entries, 1-hour TTL
+        self._geocode_cache = LRUCache(maxsize=128, ttl_seconds=3600.0)
 
     # ── Geocoding ──────────────────────────────────────────────────────────
 
     async def geocode(self, address: str) -> Optional[dict]:
         """
-        Geocode address with 3-attempt fallback strategy:
-          Attempt 1: full address + ", Surabaya"
-          Attempt 2: first 60 chars (strip prose noise) + ", Surabaya"
-          Attempt 3: just "Surabaya" as anchor (gives UBAYA-area coords for distance calc)
+        Geocode with cache + circuit breaker + 3-attempt fallback.
         """
+        # Check cache first
+        cache_key = address.strip().lower()[:200]
+        cached = self._geocode_cache.get(cache_key)
+        if cached is not None:
+            log.info("Geocode CACHE HIT | address=%r", address[:60])
+            return cached
+
+        # Check circuit breaker
+        if self._circuit.is_open:
+            log.warning("Geocode CIRCUIT OPEN — returning None for %r", address[:60])
+            return None
+
         queries = self._build_geocode_queries(address)
         for attempt, query in enumerate(queries, 1):
             result = await self._geocode_once(query, attempt)
             if result:
+                self._circuit.record_success()
+                # Cache the successful result
+                self._geocode_cache.set(cache_key, result)
                 return result
+            self._circuit.record_failure()
+
         log.error(
-            "Maps Geocode EXHAUSTED all %d attempts | original_address=%r",
+            "Geocode EXHAUSTED all %d attempts | address=%r",
             len(queries), address,
         )
         return None

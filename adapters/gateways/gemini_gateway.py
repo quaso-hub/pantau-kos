@@ -196,16 +196,19 @@ class GeminiGateway(AIGateway):
         )
 
         # Phase 2: structured JSON extraction (no tools, schema-bound)
+        # CRITICAL: image_bytes MUST be passed to Phase 2 — the extraction model
+        # needs to see the photo to extract room condition, size, furniture, etc.
         extract_prompt = (
             "=== TEKS IKLAN ASLI ===\n"
             f"{prompt}\n\n"
             "=== HASIL INVESTIGASI INTERNET ===\n"
             f"{grounded_text[:3000]}\n\n"
-            "Ekstrak semua fakta keras dari iklan dan hasil investigasi di atas. "
+            "Ekstrak semua fakta keras dari iklan, foto, dan hasil investigasi di atas. "
             "Kembalikan JSON sesuai schema. WAJIB isi setiap field yang datanya tersedia."
         )
         result = await self._extraction_call(
             prompt=extract_prompt,
+            image_bytes=image_bytes,
             system_prompt=_AGENT1_EXTRACT_SYSTEM,
             json_schema=json_schema or _AGENT1_JSON_SCHEMA,
         )
@@ -273,9 +276,15 @@ class GeminiGateway(AIGateway):
         prompt: str,
         system_prompt: str,
         json_schema: dict,
+        image_bytes: Optional[bytes] = None,
     ) -> dict:
-        """Phase 2: strict JSON extraction — NO tools, schema-bound response."""
-        parts = [types.Part.from_text(text=prompt)]
+        """Phase 2: strict JSON extraction — NO tools, schema-bound response.
+        Optionally includes image for vision-based extraction."""
+        parts: list = []
+        if image_bytes:
+            mime = "image/png" if image_bytes[:4] == b"\x89PNG" else "image/jpeg"
+            parts.append(types.Part.from_bytes(data=image_bytes, mime_type=mime))
+        parts.append(types.Part.from_text(text=prompt))
 
         gen_config = types.GenerateContentConfig(
             system_instruction=system_prompt,

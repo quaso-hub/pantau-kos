@@ -36,6 +36,7 @@ from adapters.controllers.formatter import (
 )
 from adapters.controllers.keyboards import confirm_keyboard, report_keyboard
 from infrastructure.container import Container
+from infrastructure.logger import set_trace_id, get_trace_id, get_analysis_logs
 
 log = logging.getLogger("god-eye.handlers")
 
@@ -155,8 +156,12 @@ async def _run_analysis_with_progress(
     source_link: str,
     source: str,
     container: Container,
+    trace_id: str = "no-trace",
 ) -> None:
     """5-checkpoint progressive-edit analysis via service layer."""
+    # Propagate trace ID into this async context
+    set_trace_id(trace_id)
+
     session_repo = container.session_repo
     analysis_svc = container.analysis_service
     msg_id: Optional[int] = None
@@ -223,9 +228,13 @@ async def _run_analysis_with_progress(
 
         report = format_report(result)
         chunks = split_message(report)
+
+        # Check if there are warning/error logs for this analysis
+        analysis_log_entries = get_analysis_logs(trace_id)
         keyboard = report_keyboard(
             listing_id=result.listing_id,
             phone=result.phones[0] if result.phones else None,
+            trace_id=trace_id if analysis_log_entries else None,
         )
 
         await bot.edit_message_text(
@@ -413,6 +422,9 @@ async def handle_message(
         log.warning("save_context failed (non-fatal): %s", _ctx_exc)
 
     # ── Spawn background Task — handler returns immediately after this ──────
+    trace_id = f"upd-{update_id}"
+    set_trace_id(trace_id)
+
     async def _analysis_task() -> None:
         try:
             await _run_analysis_with_progress(
@@ -423,6 +435,7 @@ async def handle_message(
                 source_link=source_link,
                 source="manual",
                 container=container,
+                trace_id=trace_id,
             )
         finally:
             # Always release the lock — even on exception or cancellation
@@ -510,6 +523,7 @@ async def handle_callback_query(
             return
 
         _mark_chat_busy(allowed_chat_id)
+        retry_trace_id = f"retry-{int(time.monotonic())}"
 
         async def _retry_task() -> None:
             try:
@@ -521,6 +535,7 @@ async def handle_callback_query(
                     source_link=last_ctx.get("source_link", ""),
                     source="retry",
                     container=container,
+                    trace_id=retry_trace_id,
                 )
             finally:
                 _mark_chat_free(allowed_chat_id)
@@ -534,6 +549,41 @@ async def handle_callback_query(
         return
 
     action, listing_id = data.split(":", 1)
+
+    # ── View Logs (trace_id passed in listing_id slot) ────────────────────
+    if action == "view_logs":
+        trace_id = listing_id  # the value after ":" is actually the trace_id
+        logs = get_analysis_logs(trace_id)
+        if not logs:
+            await context.bot.send_message(
+                chat_id=allowed_chat_id,
+                text=(
+                    "*\\[LOGS\\]* No warnings or errors recorded for this analysis\\.\n"
+                    f"`trace: {escape_md(trace_id)}`"
+                ),
+                parse_mode=ParseMode.MARKDOWN_V2,
+            )
+            return
+
+        lines = [f"*\\[LOGS\\]* `trace: {escape_md(trace_id)}`\n"]
+        for entry in logs:
+            sev = entry.get("sev", "?")
+            comp = escape_md(entry.get("comp", "?"))
+            func = escape_md(entry.get("func", "?"))
+            msg_text = escape_md(entry.get("msg", "")[:120])
+            lines.append(f"`[{escape_md(sev)}]` {comp}\\.{func}: {msg_text}")
+
+        full_text = "\n".join(lines)
+        # Telegram message limit is 4096 chars
+        if len(full_text) > 3900:
+            full_text = full_text[:3900] + "\n\n`… truncated`"
+
+        await context.bot.send_message(
+            chat_id=allowed_chat_id,
+            text=full_text,
+            parse_mode=ParseMode.MARKDOWN_V2,
+        )
+        return
 
     if action == "open_dashboard":
         return

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-GOD EYE -- Main entry point (v4.0 — Clean Architecture)
+GOD EYE -- Main entry point (v5.0 — Resilient & Observable System)
 
 Architecture:
   ┌─────────────────────────────────────────────────────────────────┐
@@ -13,15 +13,16 @@ Architecture:
   │                                    └─────────────────────────┘ │
   └─────────────────────────────────────────────────────────────────┘
 
-Changes from v3.3:
-  - DI Container wires all dependencies; handlers read from bot_data["container"]
-  - /monitor returns 202 Accepted immediately, processes in background
-  - All imports point to v2/ clean architecture modules
-  - Handlers are thin adapters; business logic lives in services/
+v5.0 changes:
+  - Structured JSON logging (GCP Cloud Logging compatible)
+  - Graceful shutdown: SIGTERM → wait for background tasks → clean exit
+  - All logging now structured with trace IDs
 """
 import asyncio
 import logging
 import os
+import signal
+import sys
 import threading
 from typing import Optional
 
@@ -38,6 +39,7 @@ from telegram.ext import (
 
 from infrastructure.config import AppConfig
 from infrastructure.container import Container
+from infrastructure.logger import setup_logging, get_logger
 from adapters.controllers.telegram_handlers import (
     STATE_BUDGET,
     STATE_CONFIRM,
@@ -59,12 +61,9 @@ from adapters.controllers.telegram_handlers import (
 from adapters.controllers.monitor_handler import handle_monitor_post
 from web.dashboard import dashboard_bp
 
-# -- Logging -------------------------------------------------------------------
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-)
-log = logging.getLogger("god-eye")
+# -- Structured Logging (must be before any logger usage) ----------------------
+setup_logging(level=logging.INFO)
+log = get_logger("god-eye")
 
 # -- Config (single source of truth) ------------------------------------------
 config = AppConfig.from_env()
@@ -210,6 +209,54 @@ def _start_ptb() -> None:
 
 
 _start_ptb()
+
+# -- Graceful Shutdown ---------------------------------------------------------
+_shutdown_event = threading.Event()
+
+
+def _graceful_shutdown(signum, frame):
+    """
+    Handle SIGTERM from Cloud Run.
+    Cloud Run gives ~10s after SIGTERM before SIGKILL.
+    Wait for running analysis tasks, then exit cleanly.
+    """
+    sig_name = signal.Signals(signum).name if hasattr(signal, 'Signals') else str(signum)
+    log.warning("Received %s — initiating graceful shutdown", sig_name)
+
+    if _ptb_loop:
+        import concurrent.futures
+        future = asyncio.run_coroutine_threadsafe(
+            _wait_for_analysis_tasks(timeout=8.0), _ptb_loop
+        )
+        try:
+            future.result(timeout=9.0)
+        except (concurrent.futures.TimeoutError, Exception) as exc:
+            log.warning("Graceful wait interrupted: %s", exc)
+
+    _shutdown_event.set()
+    log.info("Graceful shutdown complete.")
+    sys.exit(0)
+
+
+async def _wait_for_analysis_tasks(timeout: float = 8.0) -> None:
+    """Wait for running analysis asyncio tasks to complete before shutdown."""
+    tasks = [
+        t for t in asyncio.all_tasks()
+        if t.get_name().startswith("analysis-") or t.get_name().startswith("retry-")
+    ]
+    if not tasks:
+        log.info("No running analysis tasks — immediate shutdown OK.")
+        return
+    log.info("Waiting for %d analysis task(s) (timeout=%.0fs)", len(tasks), timeout)
+    done, pending = await asyncio.wait(tasks, timeout=timeout)
+    if pending:
+        log.warning("Cancelling %d task(s) still running after timeout", len(pending))
+        for t in pending:
+            t.cancel()
+
+
+signal.signal(signal.SIGTERM, _graceful_shutdown)
+signal.signal(signal.SIGINT, _graceful_shutdown)
 
 # -- Flask app -----------------------------------------------------------------
 flask_app = Flask(__name__)

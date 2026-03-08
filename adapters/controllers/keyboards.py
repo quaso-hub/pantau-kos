@@ -1,13 +1,18 @@
 """
-adapters/controllers/keyboards.py  (v4.0)
-Inline keyboard builders — identical to v3.2 but in the adapters layer.
+adapters/controllers/keyboards.py  (v5.0)
+Inline keyboard builders with optional "View Logs" for observability.
 """
+from __future__ import annotations
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 DASHBOARD_BASE = "https://god-eye.ikrn.engineer/dashboard"
 
 
-def report_keyboard(listing_id: str, phone: str | None = None) -> InlineKeyboardMarkup:
+def report_keyboard(
+    listing_id: str,
+    phone: str | None = None,
+    trace_id: str | None = None,
+) -> InlineKeyboardMarkup:
     dashboard_url = f"{DASHBOARD_BASE}/{listing_id}"
     rows = [
         [
@@ -32,6 +37,10 @@ def report_keyboard(listing_id: str, phone: str | None = None) -> InlineKeyboard
         elif not normalized.startswith("62"):
             normalized = "62" + normalized
         rows[2].insert(0, InlineKeyboardButton("Contact WA", url=f"https://wa.me/{normalized}"))
+    if trace_id:
+        rows.append([
+            InlineKeyboardButton("📋 View Logs", callback_data=f"view_logs:{trace_id}"),
+        ])
     return InlineKeyboardMarkup(rows)
 
 
