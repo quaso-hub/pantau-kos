@@ -53,7 +53,7 @@ from domain.interfaces import (
     PreferencesRepository,
 )
 from domain.models import AnalysisResult, MapsResult, UserPreferences
-from domain.scoring import calculate_score
+from domain.scoring import calculate_score, EvidenceSignals
 from domain.text_extractors import (
     budget_status,
     extract_fraud_risk,
@@ -354,9 +354,66 @@ class AnalysisService:
         price_score = agent3_data.get("price_score")
         composite_score = agent3_data.get("composite_score")
 
-        # Fallback score if Stage 2 failed
+        # ── Build Naïve Bayes EvidenceSignals from pipeline outputs ──────────────
+        # Each signal is True/False/None (None = agent timed out, signal unknown)
+        nearby_count = sum(1 for p in maps_result.nearby if p.found)
+
+        # phone_suspicious: GetContact/phone_reputation data from web intel agent
+        _phone_rep: Optional[str] = agent3_data.get("phone_reputation") or agent3_data.get("contact_risk")
+        phone_suspicious: Optional[bool] = None
+        if _phone_rep is not None:
+            phone_suspicious = str(_phone_rep).upper() in ("HIGH", "SUSPICIOUS", "FLAGGED", "BAD")
+
+        # price_anomaly: < 300k/bulan (too cheap = red flag) OR > 3jt/bulan (for Rungkut area)
+        price_anomaly: Optional[bool] = None
+        if final_price_val is not None:
+            price_anomaly = final_price_val < 300_000 or final_price_val > 3_000_000
+
+        # photo_fake: Vision agent reported stock photo / watermark / mismatch
+        photo_fake: Optional[bool] = None
+        if vision_data:
+            _auth = vision_data.get("authenticity") or {}
+            if isinstance(_auth, dict):
+                _verdict = str(_auth.get("verdict") or _auth.get("is_authentic") or "").upper()
+                if _verdict in ("FAKE", "FALSE", "STOCK_PHOTO", "NOT_AUTHENTIC"):
+                    photo_fake = True
+                elif _verdict in ("AUTHENTIC", "TRUE", "REAL", "GENUINE"):
+                    photo_fake = False
+            # Also check top-level vision flag
+            _vis_flag = vision_data.get("photo_authentic")
+            if _vis_flag is not None and photo_fake is None:
+                photo_fake = not bool(_vis_flag)
+
+        # addr_unverifiable: geocode returned no result AND regex found no address
+        addr_geocoded = (
+            (maps_result.geocode is not None and maps_result.geocode != {})
+            or (maps_result.address_validated is not None and maps_result.address_validated != "")
+        )
+        addr_unverifiable: Optional[bool] = (not addr_geocoded) and (not address_from_text)
+
+        # duplicate_listing: LLM risk analyst or web intel flagged duplicate/copas
+        _dup_flag = agent3_data.get("duplicate_listing") or agent3_data.get("is_duplicate")
+        duplicate_listing: Optional[bool] = bool(_dup_flag) if _dup_flag is not None else None
+
+        # desc_contradiction: LLM found internal inconsistency in listing text
+        _contra = agent3_data.get("description_contradiction") or agent3_data.get("text_inconsistency")
+        desc_contradiction: Optional[bool] = bool(_contra) if _contra is not None else None
+
+        ev_signals = EvidenceSignals(
+            phone_suspicious=phone_suspicious,
+            price_anomaly=price_anomaly,
+            photo_fake=photo_fake,
+            addr_unverifiable=addr_unverifiable,
+            duplicate_listing=duplicate_listing,
+            desc_contradiction=desc_contradiction,
+        )
+        log.debug(
+            "[NaiveBayes] signals=%s",
+            {f: getattr(ev_signals, f) for f in ev_signals.__dataclass_fields__},
+        )
+
+        # Fallback score if Stage 2 failed (or always use our own Naive-Bayes score)
         if composite_score is None:
-            nearby_count = sum(1 for p in maps_result.nearby if p.found)
             composite_score = calculate_score(
                 price_value=final_price_val,
                 km=km_val,
@@ -364,6 +421,7 @@ class AnalysisService:
                 fraud_risk=fraud_risk,
                 nearby_count=nearby_count,
                 preferences=prefs,
+                signals=ev_signals,
             )
 
         # Build risk flags text for formatter compatibility
