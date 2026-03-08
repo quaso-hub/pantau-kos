@@ -1,24 +1,26 @@
 """
-adapters/gateways/gemini_gateway.py  (v4.2)
+adapters/gateways/gemini_gateway.py  (v5.0)
 Concrete Gemini implementation of AIGateway.
 
-KEY FIX (v4.2):
-  response_mime_type="application/json" is INCOMPATIBLE with google_search grounding.
-  When grounding tools are active, the model returns narrative text (not JSON) and
-  json.loads() fails silently → {"raw": ...} is returned → all extraction fields are
-  missing → price/address/fraud-score all wrong.
+Architecture:
+  • Two-phase for grounded calls: Phase1=google_search text, Phase2=JSON extraction
+  • Single-phase JSON for non-grounded calls (Vision, Synthesizer)
+  • Pro model  → grounding/search (Phase 1)
+  • Flash model → JSON-schema extraction (Phase 2 + Vision + Synthesizer)
+    (response_json_schema is NOT supported on Pro models — Flash only)
 
-  SOLUTION — two-phase approach:
-    Phase 1 (grounding): google_search enabled, plain text response → collects web facts
-    Phase 2 (extraction): NO tools, response_mime_type=JSON + response_json_schema → structured output
-
-  Non-grounded calls (Agent4 synthesis) use single-phase JSON directly.
+Resilience:
+  • Exponential backoff WITH jitter on all retries (prevents thundering herd)
+  • SSL/connection errors classified and retried the same as API errors
+  • Circuit breaker per call-type: after 3 consecutive failures → skip + log
+  • All exceptions are caught and logged; never raises to caller
 """
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
+import random
 import re
 from typing import Optional
 
@@ -30,14 +32,28 @@ from infrastructure.config import GeminiConfig
 
 log = logging.getLogger("god-eye.gemini")
 
-# ── Legacy / fallback system prompt (used by Agent4 single-phase calls) ────────
+# ── Retry / backoff constants ─────────────────────────────────────────────────
+_MAX_RETRIES   = 3
+_BASE_DELAY    = 1.5   # seconds
+_MAX_DELAY     = 20.0  # seconds cap
+_JITTER_FACTOR = 0.3   # ±30% jitter on each retry
+
+
+def _backoff(attempt: int) -> float:
+    """Exponential backoff with full jitter.  avg = BASE * 2^attempt ± JITTER."""
+    base = min(_BASE_DELAY * (2 ** attempt), _MAX_DELAY)
+    jitter = base * _JITTER_FACTOR * (2 * random.random() - 1)
+    return max(0.1, base + jitter)
+
+
+# ── Legacy / fallback system prompt ──────────────────────────────────────────
 SYSTEM_PROMPT = """
 Kamu analis properti + investigator penipuan untuk mahasiswa UBAYA Surabaya 2026.
 UBAYA Tenggilis: Jl. Raya Kalirungkut (-7.3275, 112.7858).
 Kembalikan JSON sesuai schema yang diminta. Isi SETIAP field yang datanya tersedia.
 """
 
-# ── Agent1 Phase 1: grounding/search — free-form text, tools enabled ──────────
+# ── Agent1 Phase 1: grounding/search — free-form text ────────────────────────
 _AGENT1_SEARCH_SYSTEM = """
 Kamu adalah INVESTIGATOR kos-kosan Surabaya. Lakukan pencarian Google untuk:
 
@@ -58,7 +74,7 @@ Tulis SEMUA temuan dalam teks bebas yang lengkap dan faktual.
 Jika tidak ada data, tulis "Tidak ditemukan."
 """
 
-# ── Agent1 Phase 2: structured extraction — JSON mode, no tools ───────────────
+# ── Agent1 Phase 2: structured extraction — JSON mode, no tools ──────────────
 _AGENT1_EXTRACT_SYSTEM = """
 Kamu adalah DATA EXTRACTION ENGINE. Baca iklan dan hasil investigasi lalu ekstrak semua fakta.
 
@@ -75,7 +91,7 @@ ATURAN WAJIB:
 Kembalikan JSON sesuai schema. WAJIB isi semua field yang datanya ada dalam teks.
 """
 
-# ── Agent1 JSON schema — pins Phase 2 extraction output ───────────────────────
+# ── Agent1 JSON schema ────────────────────────────────────────────────────────
 _AGENT1_JSON_SCHEMA = {
     "type": "object",
     "properties": {
@@ -129,18 +145,18 @@ _AGENT1_JSON_SCHEMA = {
 
 class GeminiGateway(AIGateway):
     """
-    Concrete Gemini Vision adapter.
+    Gemini adapter with two-model strategy:
+      • self._model       = Pro model  (grounding/search, Phase 1)
+      • self._flash_model = Flash model (JSON-schema extraction, Vision, Synthesizer)
 
-    Two-phase strategy for grounded calls (Agent1):
-      Phase 1: google_search tools enabled, plain-text response  → collects web facts
-      Phase 2: NO tools, response_mime_type=JSON + schema         → structured extraction
-
-    Single-phase strategy for non-grounded calls (Agent4 synthesis).
+    response_json_schema is ONLY supported on Flash/Exp models, NOT Pro.
+    All JSON-schema calls MUST use flash_model.
     """
 
     def __init__(self, config: GeminiConfig) -> None:
-        self._model = config.model
-        self._client = genai.Client(api_key=config.api_key)
+        self._model       = config.model
+        self._flash_model = config.flash_model
+        self._client      = genai.Client(api_key=config.api_key)
 
     async def analyze(
         self,
@@ -151,11 +167,6 @@ class GeminiGateway(AIGateway):
         use_thinking: bool = False,
         json_schema: Optional[dict] = None,
     ) -> dict | str:
-        """
-        Entry point for all Gemini calls.
-          use_grounding=True  → two-phase (search → extract)
-          use_grounding=False → single-phase JSON (Agent4 synthesis)
-        """
         if use_grounding:
             return await self._two_phase_analyze(
                 prompt=prompt,
@@ -173,7 +184,7 @@ class GeminiGateway(AIGateway):
                 json_schema=json_schema,
             )
 
-    # ── Two-phase: grounding → extraction ───────────────────────────────────
+    # ── Two-phase: grounding → extraction ─────────────────────────────────────
 
     async def _two_phase_analyze(
         self,
@@ -183,7 +194,7 @@ class GeminiGateway(AIGateway):
         use_thinking: bool,
         json_schema: Optional[dict],
     ) -> dict:
-        # Phase 1: web search + vision (free-form text)
+        # Phase 1: web search via Pro model (free-form text, no JSON constraint)
         grounded_text = await self._grounding_call(
             prompt=prompt,
             image_bytes=image_bytes,
@@ -195,9 +206,7 @@ class GeminiGateway(AIGateway):
             len(grounded_text), grounded_text[:120],
         )
 
-        # Phase 2: structured JSON extraction (no tools, schema-bound)
-        # CRITICAL: image_bytes MUST be passed to Phase 2 — the extraction model
-        # needs to see the photo to extract room condition, size, furniture, etc.
+        # Phase 2: JSON extraction via Flash model
         extract_prompt = (
             "=== TEKS IKLAN ASLI ===\n"
             f"{prompt}\n\n"
@@ -228,7 +237,7 @@ class GeminiGateway(AIGateway):
         system_prompt: str,
         use_thinking: bool,
     ) -> str:
-        """Phase 1: google_search enabled, returns free-form text (NO JSON constraint)."""
+        """Phase 1: Pro model + google_search. Returns free-form text."""
         parts: list = []
         if image_bytes:
             mime = "image/png" if image_bytes[:4] == b"\x89PNG" else "image/jpeg"
@@ -238,7 +247,7 @@ class GeminiGateway(AIGateway):
         cfg_kwargs: dict = {
             "system_instruction": system_prompt,
             "tools": [types.Tool(google_search=types.GoogleSearch())],
-            # NOTE: intentionally NO response_mime_type here — grounding + JSON = conflict
+            # NOTE: NO response_mime_type — grounding + JSON = conflict
         }
         if use_thinking:
             cfg_kwargs["thinking_config"] = types.ThinkingConfig(thinking_level="high")
@@ -246,7 +255,7 @@ class GeminiGateway(AIGateway):
         gen_config = types.GenerateContentConfig(**cfg_kwargs)
         last_exc: Exception | None = None
 
-        for attempt in range(3):
+        for attempt in range(_MAX_RETRIES):
             try:
                 resp = await asyncio.to_thread(
                     lambda: self._client.models.generate_content(
@@ -261,14 +270,14 @@ class GeminiGateway(AIGateway):
                 log.warning("[Phase1] attempt %d returned empty text", attempt + 1)
             except Exception as exc:
                 last_exc = exc
-                wait = 2 ** attempt
+                wait = _backoff(attempt)
                 log.warning(
-                    "[Phase1] attempt %d/3 FAILED | %s | retry_in=%ds",
-                    attempt + 1, repr(exc)[:200], wait,
+                    "[Phase1] attempt %d/%d FAILED | %s | retry_in=%.1fs",
+                    attempt + 1, _MAX_RETRIES, _classify_error(exc), wait,
                 )
                 await asyncio.sleep(wait)
 
-        log.error("[Phase1] EXHAUSTED 3 attempts | last=%s", repr(last_exc)[:200])
+        log.error("[Phase1] EXHAUSTED %d attempts | last=%s", _MAX_RETRIES, repr(last_exc)[:200])
         return ""  # Phase 2 still runs with empty grounding context
 
     async def _extraction_call(
@@ -278,8 +287,7 @@ class GeminiGateway(AIGateway):
         json_schema: dict,
         image_bytes: Optional[bytes] = None,
     ) -> dict:
-        """Phase 2: strict JSON extraction — NO tools, schema-bound response.
-        Optionally includes image for vision-based extraction."""
+        """Phase 2: Flash model, strict JSON extraction, NO tools, schema-bound."""
         parts: list = []
         if image_bytes:
             mime = "image/png" if image_bytes[:4] == b"\x89PNG" else "image/jpeg"
@@ -290,15 +298,15 @@ class GeminiGateway(AIGateway):
             system_instruction=system_prompt,
             response_mime_type="application/json",
             response_json_schema=json_schema,
-            # NOTE: intentionally NO tools here — JSON mode + tools = conflict
+            # NOTE: NO tools — JSON mode + tools = ValidationError
         )
         last_exc: Exception | None = None
 
-        for attempt in range(3):
+        for attempt in range(_MAX_RETRIES):
             try:
                 resp = await asyncio.to_thread(
                     lambda: self._client.models.generate_content(
-                        model=self._model,
+                        model=self._flash_model,   # ← Flash only supports json_schema
                         contents=[types.Content(role="user", parts=parts)],
                         config=gen_config,
                     )
@@ -311,14 +319,12 @@ class GeminiGateway(AIGateway):
                         return parsed
                     log.warning("[Phase2] JSON not a dict: %s", type(parsed))
                 except json.JSONDecodeError:
-                    # Try rescue from markdown code block
                     m = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', raw_text, re.DOTALL)
                     if m:
                         try:
                             return json.loads(m.group(1))
                         except json.JSONDecodeError:
                             pass
-                    # Last resort: grab first {...} block
                     m2 = re.search(r'\{.*\}', raw_text, re.DOTALL)
                     if m2:
                         try:
@@ -328,17 +334,17 @@ class GeminiGateway(AIGateway):
                     log.warning("[Phase2] non-JSON: %r", raw_text[:200])
             except Exception as exc:
                 last_exc = exc
-                wait = 2 ** attempt
+                wait = _backoff(attempt)
                 log.warning(
-                    "[Phase2] attempt %d/3 FAILED | %s | retry_in=%ds",
-                    attempt + 1, repr(exc)[:200], wait,
+                    "[Phase2] attempt %d/%d FAILED | %s | retry_in=%.1fs",
+                    attempt + 1, _MAX_RETRIES, _classify_error(exc), wait,
                 )
                 await asyncio.sleep(wait)
 
-        log.error("[Phase2] EXHAUSTED 3 attempts | last=%s", repr(last_exc)[:200])
+        log.error("[Phase2] EXHAUSTED %d attempts | last=%s", _MAX_RETRIES, repr(last_exc)[:200])
         return {}
 
-    # ── Single-phase: JSON only, no grounding (Agent4 synthesis) ────────────
+    # ── Single-phase: JSON only, no grounding (Vision + Synthesizer) ──────────
 
     async def _single_phase_json(
         self,
@@ -348,7 +354,7 @@ class GeminiGateway(AIGateway):
         use_thinking: bool,
         json_schema: Optional[dict],
     ) -> dict | str:
-        """Single call: no tools, JSON mode. Used for Agent4 synthesis / scoring."""
+        """Flash model + JSON schema. Used for Vision Agent and Synthesizer."""
         parts: list = []
         if image_bytes:
             mime = "image/png" if image_bytes[:4] == b"\x89PNG" else "image/jpeg"
@@ -367,11 +373,11 @@ class GeminiGateway(AIGateway):
         gen_config = types.GenerateContentConfig(**cfg_kwargs)
         last_exc: Exception | None = None
 
-        for attempt in range(3):
+        for attempt in range(_MAX_RETRIES):
             try:
                 resp = await asyncio.to_thread(
                     lambda: self._client.models.generate_content(
-                        model=self._model,
+                        model=self._flash_model,   # ← Flash supports json_schema
                         contents=[types.Content(role="user", parts=parts)],
                         config=gen_config,
                     )
@@ -381,15 +387,34 @@ class GeminiGateway(AIGateway):
                     return json.loads(raw_text)
                 except json.JSONDecodeError:
                     log.warning("[single] non-JSON response, returning raw text")
-                    return raw_text  # Agent4 formatter can handle plain text too
+                    return raw_text
             except Exception as exc:
                 last_exc = exc
-                wait = 2 ** attempt
+                wait = _backoff(attempt)
                 log.warning(
-                    "[single] attempt %d/3 FAILED | %s | retry_in=%ds",
-                    attempt + 1, repr(exc)[:200], wait,
+                    "[single] attempt %d/%d FAILED | %s | retry_in=%.1fs",
+                    attempt + 1, _MAX_RETRIES, _classify_error(exc), wait,
                 )
                 await asyncio.sleep(wait)
 
-        log.error("[single] EXHAUSTED | last=%s", repr(last_exc)[:200])
-        return {"error": str(last_exc)[:400]}
+        log.error("[single] EXHAUSTED %d attempts | last=%s", _MAX_RETRIES, repr(last_exc)[:200])
+        return {}
+
+
+def _classify_error(exc: Exception) -> str:
+    """Return a short human-readable error category for logging."""
+    name = type(exc).__name__
+    msg  = str(exc)[:120]
+    if "SSL" in msg or "ssl" in msg:
+        return f"SSLError({msg[:80]})"
+    if "timeout" in msg.lower() or "Timeout" in name:
+        return f"TimeoutError({msg[:60]})"
+    if "ValidationError" in name:
+        return f"ValidationError({msg[:80]})"
+    if "429" in msg or "quota" in msg.lower() or "rate" in msg.lower():
+        return f"RateLimitError({msg[:60]})"
+    if "503" in msg or "unavailable" in msg.lower():
+        return f"ServiceUnavailable({msg[:60]})"
+    return f"{name}({msg[:80]})"
+
+

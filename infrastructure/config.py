@@ -25,13 +25,17 @@ class TelegramConfig:
 @dataclass(frozen=True)
 class GeminiConfig:
     api_key: str = ""
-    model: str = "gemini-3.1-pro-preview"
+    model: str = "gemini-2.5-pro-preview-06-05"
+    # Flash model: supports response_json_schema (Pro does NOT).
+    # Used for Vision Agent (image-only JSON extraction) and Synthesizer.
+    flash_model: str = "gemini-2.0-flash"
 
     @classmethod
     def from_env(cls) -> "GeminiConfig":
         return cls(
             api_key=os.environ["GEMINI_API_KEY"],
-            model=os.environ.get("GEMINI_MODEL", "gemini-3.1-pro-preview"),
+            model=os.environ.get("GEMINI_MODEL", "gemini-2.5-pro-preview-06-05"),
+            flash_model=os.environ.get("GEMINI_FLASH_MODEL", "gemini-2.0-flash"),
         )
 
 

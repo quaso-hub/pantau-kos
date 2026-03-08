@@ -43,7 +43,8 @@ import asyncio
 import json
 import logging
 import textwrap
-from typing import Optional
+import time
+from typing import Dict, Optional
 
 from domain.interfaces import (
     AIGateway,
@@ -633,18 +634,105 @@ class AnalysisService:
             return UserPreferences()
 
 
+# ── Circuit Breaker ────────────────────────────────────────────────────────────
+
+class CircuitBreaker:
+    """Per-service circuit breaker (error-handling-patterns: fail-fast).
+
+    States:
+      CLOSED  → normal, calls pass through
+      OPEN    → too many failures; calls skipped immediately for ``cooldown`` seconds
+      HALF-OPEN → cooldown expired; next call is a probe — resets on success
+
+    Args:
+        name:      human-readable service label used in logs
+        threshold: consecutive failures before opening (default 3)
+        cooldown:  seconds to wait before half-open probe (default 60)
+    """
+
+    def __init__(self, name: str, threshold: int = 3, cooldown: float = 60.0) -> None:
+        self._name = name
+        self._threshold = threshold
+        self._cooldown = cooldown
+        self._failures = 0
+        self._opened_at: Optional[float] = None
+
+    # ── public ──────────────────────────────────────────────────────────────
+
+    @property
+    def is_open(self) -> bool:
+        """True when the circuit is open and calls should be skipped."""
+        if self._opened_at is None:
+            return False
+        elapsed = time.monotonic() - self._opened_at
+        if elapsed >= self._cooldown:
+            # Transition to HALF-OPEN — let one probe through
+            log.info("[CircuitBreaker:%s] HALF-OPEN after %.0fs cooldown", self._name, elapsed)
+            self._opened_at = None  # allow the next call
+            return False
+        return True
+
+    def record_success(self) -> None:
+        if self._failures:
+            log.info("[CircuitBreaker:%s] CLOSED after success", self._name)
+        self._failures = 0
+        self._opened_at = None
+
+    def record_failure(self) -> None:
+        self._failures += 1
+        if self._failures >= self._threshold and self._opened_at is None:
+            self._opened_at = time.monotonic()
+            log.warning(
+                "[CircuitBreaker:%s] OPEN — %d consecutive failures; "
+                "skipping for %.0fs",
+                self._name, self._failures, self._cooldown,
+            )
+
+
+# Module-level registry — one breaker per logical service name
+_circuit_breakers: Dict[str, CircuitBreaker] = {}
+
+
+def _get_breaker(name: str) -> CircuitBreaker:
+    if name not in _circuit_breakers:
+        _circuit_breakers[name] = CircuitBreaker(name)
+    return _circuit_breakers[name]
+
+
+# ── Safe agent wrapper ─────────────────────────────────────────────────────────
+
 async def _safe_agent(coro, fallback, agent_name: str = "Agent", timeout: float = 50.0):
-    """Run agent coroutine with timeout. Log failure, return fallback. Never raises."""
+    """Run agent coroutine with timeout + circuit-breaker. Never raises.
+
+    Circuit-breaker behaviour:
+      • If the breaker for ``agent_name`` is OPEN, skip the call immediately
+        and return ``fallback`` (fail-fast — no wasted timeout wait).
+      • On success → record_success() → breaker stays/moves to CLOSED.
+      • On timeout/exception → record_failure() → opens after threshold.
+    """
+    breaker = _get_breaker(agent_name)
+
+    if breaker.is_open:
+        log.warning(
+            "[%s] CIRCUIT_OPEN — skipping call, returning fallback immediately",
+            agent_name,
+        )
+        return fallback
+
     try:
-        return await asyncio.wait_for(coro, timeout=timeout)
+        result = await asyncio.wait_for(coro, timeout=timeout)
+        breaker.record_success()
+        return result
     except asyncio.TimeoutError:
         log.error("[%s] TIMEOUT after %.0fs — returning fallback", agent_name, timeout)
+        breaker.record_failure()
         return fallback
     except Exception as exc:
         log.error(
             "[%s] EXCEPTION | type=%s | detail=%s",
             agent_name, type(exc).__name__, repr(exc)[:300],
         )
+        breaker.record_failure()
         return fallback
 
 
