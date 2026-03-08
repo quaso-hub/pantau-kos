@@ -34,6 +34,12 @@ from domain.text_extractors import (
 log = logging.getLogger("god-eye.analysis-service")
 
 
+class PipelineAbortError(Exception):
+    """Raised when a critical agent fails and the pipeline must halt.
+    The message is user-facing (Bahasa Indonesia).
+    The caller should send it to Telegram and NOT persist any data."""
+
+
 async def _safe(coro, fallback=None, name: str = ""):
     """Run coroutine with 15s timeout. Return fallback on failure (non-fatal)."""
     try:
@@ -41,6 +47,23 @@ async def _safe(coro, fallback=None, name: str = ""):
     except Exception as exc:
         log.warning("%s failed: %s", name or "safe()", exc)
         return fallback
+
+
+async def _critical(coro, name: str, timeout: float = 25.0):
+    """Run coroutine with timeout. Raise PipelineAbortError on any failure."""
+    try:
+        result = await asyncio.wait_for(coro, timeout=timeout)
+        return result
+    except asyncio.TimeoutError:
+        log.error("[CRITICAL] %s TIMEOUT after %.0fs", name, timeout)
+        raise PipelineAbortError(
+            f"⚠️ Analisis gagal: agent *{name}* timeout. Coba kirim ulang dalam beberapa saat."
+        )
+    except Exception as exc:
+        log.error("[CRITICAL] %s EXCEPTION: %s", name, exc)
+        raise PipelineAbortError(
+            f"⚠️ Analisis gagal: agent *{name}* error. Coba kirim ulang dalam beberapa saat."
+        )
 
 
 class AnalysisService:
@@ -97,11 +120,15 @@ class AnalysisService:
             "Analisis kos-kosan ini sesuai instruksi sistem. "
             "Kembalikan JSON lengkap dengan semua field yang diminta."
         )
-        gemini_data: dict = await _safe(
+        gemini_data: dict = await _critical(
             self._gemini.analyze(gemini_prompt, image_bytes),
-            fallback={},
-            name="Gemini",
+            name="Gemini-Vision",
+            timeout=30.0,
         ) or {}
+        if not gemini_data:
+            raise PipelineAbortError(
+                "⚠️ Analisis gagal: Gemini tidak mengembalikan data. Coba kirim ulang."
+            )
         gemini_raw = gemini_data.get("summary", str(gemini_data)) if gemini_data else ""
 
         # ── 2. Location extraction ───────────────────────────────────────────
@@ -151,9 +178,13 @@ class AnalysisService:
             "Jawab ringkas, poin-poin, Bahasa Indonesia."
         )
         deepseek_raw: str = (
-            await _safe(self._deepseek.analyze(deepseek_prompt), fallback="", name="DeepSeek")
+            await _critical(self._deepseek.analyze(deepseek_prompt), name="DeepSeek", timeout=30.0)
             or ""
         )
+        if not deepseek_raw.strip():
+            raise PipelineAbortError(
+                "⚠️ Analisis gagal: DeepSeek tidak mengembalikan data. Coba kirim ulang."
+            )
 
         fraud_risk = extract_fraud_risk(deepseek_raw)
         price_score = extract_price_score(deepseek_raw)

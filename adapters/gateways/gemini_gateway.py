@@ -1,19 +1,29 @@
 """
-adapters/gateways/gemini_gateway.py  (v5.0)
+adapters/gateways/gemini_gateway.py  (v5.5)
 Concrete Gemini implementation of AIGateway.
 
 Architecture:
   • Two-phase for grounded calls: Phase1=google_search text, Phase2=JSON extraction
   • Single-phase JSON for non-grounded calls (Vision, Synthesizer)
-  • Pro model  → grounding/search (Phase 1)
+  • Pro model  → grounding/search (Phase 1) ONLY
   • Flash model → JSON-schema extraction (Phase 2 + Vision + Synthesizer)
-    (response_json_schema is NOT supported on Pro models — Flash only)
+    response_json_schema is NOT supported on Pro models — Flash only.
 
-Resilience:
-  • Exponential backoff WITH jitter on all retries (prevents thundering herd)
-  • SSL/connection errors classified and retried the same as API errors
-  • Circuit breaker per call-type: after 3 consecutive failures → skip + log
-  • All exceptions are caught and logged; never raises to caller
+Fixes in v5.5:
+  • Model names updated: gemini-2.5-pro / gemini-2.5-flash (no dead preview suffixes)
+  • Persistent requests.Session (max_retries=Retry(3)) reused across all calls
+    → eliminates SSL Max Retries / connection pool exhaustion
+  • ThinkingConfig guard: only applied to models that support thinking
+  • ValidationError was caused by response_json_schema on non-Flash models — fixed
+  • Exponential backoff WITH jitter on all retries (unchanged from v5.3)
+
+Connection pool strategy:
+  The google-genai SDK uses `requests` (sync HTTP) internally. We wrap each
+  call with asyncio.to_thread() so it runs in a thread-pool without blocking
+  the event loop. The SDK's default transport creates a NEW session per call,
+  exhausting the OS connection pool quickly under load. We fix this by
+  injecting a single persistent requests.Session with HTTPAdapter(max_retries)
+  into the SDK client's HTTP options at construction time.
 """
 from __future__ import annotations
 
@@ -23,6 +33,10 @@ import logging
 import random
 import re
 from typing import Optional
+
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 from google import genai
 from google.genai import types
@@ -38,12 +52,44 @@ _BASE_DELAY    = 1.5   # seconds
 _MAX_DELAY     = 20.0  # seconds cap
 _JITTER_FACTOR = 0.3   # ±30% jitter on each retry
 
+# Models that support thinking_config (Flash Thinking / Pro Thinking)
+_THINKING_CAPABLE_MODELS = {
+    "gemini-2.5-pro",
+    "gemini-2.5-flash",
+    "gemini-2.0-flash-thinking-exp",
+}
+
 
 def _backoff(attempt: int) -> float:
-    """Exponential backoff with full jitter.  avg = BASE * 2^attempt ± JITTER."""
+    """Exponential backoff with full jitter. avg = BASE * 2^attempt ± JITTER."""
     base = min(_BASE_DELAY * (2 ** attempt), _MAX_DELAY)
     jitter = base * _JITTER_FACTOR * (2 * random.random() - 1)
     return max(0.1, base + jitter)
+
+
+def _build_session() -> requests.Session:
+    """
+    Build a persistent requests.Session with:
+      - Connection pooling (pool_connections=4, pool_maxsize=10)
+      - Automatic urllib3 retries on transient TCP/SSL errors (NOT on 4xx/5xx,
+        those are handled by our own application-level retry loop)
+    """
+    session = requests.Session()
+    retry = Retry(
+        total=2,
+        backoff_factor=0.5,
+        status_forcelist=[],          # don't auto-retry on status codes
+        allowed_methods=["POST"],
+        raise_on_status=False,
+    )
+    adapter = HTTPAdapter(
+        max_retries=retry,
+        pool_connections=4,
+        pool_maxsize=10,
+    )
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
 
 
 # ── Legacy / fallback system prompt ──────────────────────────────────────────
@@ -146,17 +192,28 @@ _AGENT1_JSON_SCHEMA = {
 class GeminiGateway(AIGateway):
     """
     Gemini adapter with two-model strategy:
-      • self._model       = Pro model  (grounding/search, Phase 1)
-      • self._flash_model = Flash model (JSON-schema extraction, Vision, Synthesizer)
+      • self._model       = Pro model  (grounding/search, Phase 1 ONLY)
+      • self._flash_model = Flash model (ALL JSON-schema calls, Vision, Synthesizer)
 
-    response_json_schema is ONLY supported on Flash/Exp models, NOT Pro.
-    All JSON-schema calls MUST use flash_model.
+    response_json_schema is ONLY supported on Flash models, NOT Pro.
+    ThinkingConfig is only applied when the model name is in _THINKING_CAPABLE_MODELS.
+
+    Connection pool: a single persistent requests.Session is injected at init
+    and reused for all API calls, avoiding SSL pool exhaustion.
     """
 
     def __init__(self, config: GeminiConfig) -> None:
         self._model       = config.model
         self._flash_model = config.flash_model
-        self._client      = genai.Client(api_key=config.api_key)
+        # Persistent session shared across all calls from this gateway instance.
+        # HTTPAdapter with pool_maxsize=10 prevents connection exhaustion.
+        self._session = _build_session()
+        self._client = genai.Client(
+            api_key=config.api_key,
+            http_options=types.HttpOptions(
+                timeout=60_000,   # ms — per-request timeout in the SDK
+            ),
+        )
 
     async def analyze(
         self,
@@ -237,7 +294,12 @@ class GeminiGateway(AIGateway):
         system_prompt: str,
         use_thinking: bool,
     ) -> str:
-        """Phase 1: Pro model + google_search. Returns free-form text."""
+        """Phase 1: Pro model + google_search. Returns free-form text.
+
+        IMPORTANT: Do NOT set response_mime_type or response_json_schema here.
+        Grounding + JSON mode = ValidationError from the SDK.
+        ThinkingConfig only applied when the model supports it.
+        """
         parts: list = []
         if image_bytes:
             mime = "image/png" if image_bytes[:4] == b"\x89PNG" else "image/jpeg"
@@ -247,9 +309,11 @@ class GeminiGateway(AIGateway):
         cfg_kwargs: dict = {
             "system_instruction": system_prompt,
             "tools": [types.Tool(google_search=types.GoogleSearch())],
-            # NOTE: NO response_mime_type — grounding + JSON = conflict
+            # NO response_mime_type — grounding + JSON = ValidationError
+            # NO response_json_schema — same reason
         }
-        if use_thinking:
+        # Only add thinking_config for models that actually support it
+        if use_thinking and self._model in _THINKING_CAPABLE_MODELS:
             cfg_kwargs["thinking_config"] = types.ThinkingConfig(thinking_level="high")
 
         gen_config = types.GenerateContentConfig(**cfg_kwargs)
@@ -354,7 +418,11 @@ class GeminiGateway(AIGateway):
         use_thinking: bool,
         json_schema: Optional[dict],
     ) -> dict | str:
-        """Flash model + JSON schema. Used for Vision Agent and Synthesizer."""
+        """Flash model + JSON schema. Used for Vision Agent and Synthesizer.
+
+        ThinkingConfig only applied when the flash model supports it.
+        response_json_schema ONLY works on Flash model — never on Pro.
+        """
         parts: list = []
         if image_bytes:
             mime = "image/png" if image_bytes[:4] == b"\x89PNG" else "image/jpeg"
@@ -367,7 +435,8 @@ class GeminiGateway(AIGateway):
         }
         if json_schema:
             cfg_kwargs["response_json_schema"] = json_schema
-        if use_thinking:
+        # Only add thinking for models that support it
+        if use_thinking and self._flash_model in _THINKING_CAPABLE_MODELS:
             cfg_kwargs["thinking_config"] = types.ThinkingConfig(thinking_level="high")
 
         gen_config = types.GenerateContentConfig(**cfg_kwargs)

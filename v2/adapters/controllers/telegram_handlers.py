@@ -33,6 +33,7 @@ from adapters.controllers.formatter import (
     split_message,
 )
 from adapters.controllers.keyboards import confirm_keyboard, report_keyboard
+from services.analysis_service import PipelineAbortError
 from infrastructure.container import Container
 
 log = logging.getLogger("god-eye.handlers")
@@ -133,6 +134,15 @@ async def _run_analysis_with_progress(
                     )
                 except asyncio.TimeoutError:
                     await _send_timeout_warning(bot, chat_id, msg_id)
+                    await session_repo.clear(chat_id)
+                    return
+                except PipelineAbortError as exc:
+                    await bot.edit_message_text(
+                        text=str(exc),
+                        chat_id=chat_id,
+                        message_id=msg_id,
+                        parse_mode=ParseMode.MARKDOWN,
+                    )
                     await session_repo.clear(chat_id)
                     return
 

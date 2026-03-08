@@ -18,6 +18,14 @@ from infrastructure.config import GeminiConfig
 
 log = logging.getLogger("god-eye.gemini")
 
+# Models that support thinking_config
+_THINKING_CAPABLE_MODELS = {
+    "gemini-2.5-pro",
+    "gemini-2.5-flash",
+    "gemini-2.0-flash-thinking-exp",
+    "gemini-3.1-pro-preview",
+}
+
 SYSTEM_PROMPT = """
 Kamu analis properti + investigator penipuan untuk mahasiswa UBAYA Surabaya 2026.
 UBAYA Tenggilis: Jl. Raya Kalirungkut (-7.3275, 112.7858).
@@ -112,9 +120,15 @@ class GeminiGateway(AIGateway):
         config = types.GenerateContentConfig(
             system_instruction=SYSTEM_PROMPT,
             tools=[types.Tool(google_search=types.GoogleSearch())],
-            thinking_config=types.ThinkingConfig(thinking_level="high"),
             response_mime_type="application/json",
         )
+        if self._model in _THINKING_CAPABLE_MODELS:
+            config = types.GenerateContentConfig(
+                system_instruction=SYSTEM_PROMPT,
+                tools=[types.Tool(google_search=types.GoogleSearch())],
+                thinking_config=types.ThinkingConfig(thinking_level="high"),
+                response_mime_type="application/json",
+            )
 
         last_exc: Exception | None = None
         for attempt in range(3):

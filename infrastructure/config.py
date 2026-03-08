@@ -25,17 +25,21 @@ class TelegramConfig:
 @dataclass(frozen=True)
 class GeminiConfig:
     api_key: str = ""
-    model: str = "gemini-2.5-pro-preview-06-05"
-    # Flash model: supports response_json_schema (Pro does NOT).
-    # Used for Vision Agent (image-only JSON extraction) and Synthesizer.
-    flash_model: str = "gemini-2.0-flash"
+    # Pro model — used ONLY for grounding/search (Phase 1).
+    # Never used for JSON-schema extraction (unsupported).
+    # gemini-2.5-pro is stable as of March 2026.
+    model: str = "gemini-2.5-pro"
+    # Flash model — used for ALL JSON-schema extraction, Vision, Synthesizer.
+    # response_json_schema is supported here; NOT supported on Pro.
+    # gemini-2.5-flash is stable and faster than 2.0-flash.
+    flash_model: str = "gemini-2.5-flash"
 
     @classmethod
     def from_env(cls) -> "GeminiConfig":
         return cls(
             api_key=os.environ["GEMINI_API_KEY"],
-            model=os.environ.get("GEMINI_MODEL", "gemini-2.5-pro-preview-06-05"),
-            flash_model=os.environ.get("GEMINI_FLASH_MODEL", "gemini-2.0-flash"),
+            model=os.environ.get("GEMINI_MODEL", "gemini-2.5-pro"),
+            flash_model=os.environ.get("GEMINI_FLASH_MODEL", "gemini-2.5-flash"),
         )
 
 
@@ -43,6 +47,8 @@ class GeminiConfig:
 class DeepSeekConfig:
     api_key: str = ""
     endpoint: str = "https://api.deepseek.com/v1/chat/completions"
+    # deepseek-chat → maps to DeepSeek-V3 (latest stable as of 2026-03)
+    # deepseek-reasoner → maps to DeepSeek-R1 (use for long chain-of-thought)
     model: str = "deepseek-chat"
 
     @classmethod

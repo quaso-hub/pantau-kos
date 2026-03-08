@@ -120,7 +120,12 @@ def _next_weekday_departure(hour: int, minute: int) -> str:
 
 
 class GoogleMapsGateway(MapsGateway):
-    """Concrete Google Maps adapter with circuit breaker + geocode cache."""
+    """
+    Concrete Google Maps adapter with:
+      - Persistent httpx.AsyncClient (shared session, connection pool)
+      - Circuit breaker: open after 3 consecutive geocode failures
+      - Geocode LRU cache: 128 entries, 1-hour TTL
+    """
 
     def __init__(self, config: MapsConfig) -> None:
         self._key = config.api_key
@@ -130,6 +135,16 @@ class GoogleMapsGateway(MapsGateway):
         self._circuit = CircuitBreaker(failure_threshold=3, cooldown_seconds=60.0)
         # Geocode cache: 128 entries, 1-hour TTL
         self._geocode_cache = LRUCache(maxsize=128, ttl_seconds=3600.0)
+        # Persistent async HTTP client — connection pool shared across all API calls.
+        # Limits: 20 connections total, 10 per host — avoids SSL pool exhaustion.
+        self._http = httpx.AsyncClient(
+            timeout=httpx.Timeout(connect=5.0, read=20.0, write=10.0, pool=5.0),
+            limits=httpx.Limits(
+                max_connections=20,
+                max_keepalive_connections=10,
+                keepalive_expiry=30,
+            ),
+        )
 
     # ── Geocoding ──────────────────────────────────────────────────────────
 
@@ -195,42 +210,41 @@ class GoogleMapsGateway(MapsGateway):
 
     async def _geocode_once(self, query: str, attempt: int) -> Optional[dict]:
         try:
-            async with httpx.AsyncClient(timeout=10) as c:
-                r = await c.get(
-                    _GEOCODE_ENDPOINT,
-                    params={
-                        "address": query,
-                        "key": self._key,
-                        "language": "id",
-                        "region": "id",
-                        "components": "country:ID",
-                    },
+            r = await self._http.get(
+                _GEOCODE_ENDPOINT,
+                params={
+                    "address": query,
+                    "key": self._key,
+                    "language": "id",
+                    "region": "id",
+                    "components": "country:ID",
+                },
+            )
+            data = r.json()
+            status = data.get("status", "UNKNOWN")
+            if status == "OK":
+                results = data.get("results", [])
+                if results:
+                    loc = results[0]["geometry"]["location"]
+                    log.info(
+                        "Maps Geocode OK | attempt=%d | query=%r | formatted=%r",
+                        attempt, query, results[0].get("formatted_address", ""),
+                    )
+                    return {
+                        "lat": loc["lat"],
+                        "lng": loc["lng"],
+                        "formatted": results[0]["formatted_address"],
+                    }
+            elif status == "ZERO_RESULTS":
+                log.warning(
+                    "Maps Geocode ZERO_RESULTS | attempt=%d | query=%r — trying shorter query",
+                    attempt, query,
                 )
-                data = r.json()
-                status = data.get("status", "UNKNOWN")
-                if status == "OK":
-                    results = data.get("results", [])
-                    if results:
-                        loc = results[0]["geometry"]["location"]
-                        log.info(
-                            "Maps Geocode OK | attempt=%d | query=%r | formatted=%r",
-                            attempt, query, results[0].get("formatted_address", ""),
-                        )
-                        return {
-                            "lat": loc["lat"],
-                            "lng": loc["lng"],
-                            "formatted": results[0]["formatted_address"],
-                        }
-                elif status == "ZERO_RESULTS":
-                    log.warning(
-                        "Maps Geocode ZERO_RESULTS | attempt=%d | query=%r — trying shorter query",
-                        attempt, query,
-                    )
-                else:
-                    log.error(
-                        "Maps Geocode FAILED | attempt=%d | status=%s | error=%s | query=%r",
-                        attempt, status, data.get("error_message", "(none)"), query,
-                    )
+            else:
+                log.error(
+                    "Maps Geocode FAILED | attempt=%d | status=%s | error=%s | query=%r",
+                    attempt, status, data.get("error_message", "(none)"), query,
+                )
         except Exception as exc:
             log.error(
                 "Maps Geocode EXCEPTION | attempt=%d | type=%s | detail=%s",
@@ -267,8 +281,14 @@ class GoogleMapsGateway(MapsGateway):
 
     # ── Internal: Routes API ───────────────────────────────────────────────
 
+    async def _routes(self, dest_lat: float, dest_lng: float) -> list[RouteInfo]:
+        results = await asyncio.gather(
+            *[self._route_one(dest_lat, dest_lng, s) for s in _TRAVEL_SCENARIOS]
+        )
+        return list(results)
+
     async def _route_one(
-        self, c: httpx.AsyncClient, dest_lat: float, dest_lng: float, scenario: dict
+        self, dest_lat: float, dest_lng: float, scenario: dict
     ) -> RouteInfo:
         try:
             body = {
@@ -286,14 +306,13 @@ class GoogleMapsGateway(MapsGateway):
                 "computeAlternativeRoutes": False,
                 "languageCode": "id",
             }
-            resp = await c.post(
+            resp = await self._http.post(
                 _ROUTES_ENDPOINT,
                 json=body,
                 headers={
                     "X-Goog-Api-Key": self._key,
                     "X-Goog-FieldMask": "routes.duration,routes.distanceMeters",
                 },
-                timeout=12,
             )
             route = resp.json().get("routes", [{}])[0]
             dur_s = int(route.get("duration", "0s").rstrip("s"))
@@ -306,20 +325,11 @@ class GoogleMapsGateway(MapsGateway):
             log.warning("Routes error (%s): %s", scenario["label"], exc)
             return RouteInfo(label=scenario["label"], duration_minutes=None, distance_km=None)
 
-    async def _routes(self, dest_lat: float, dest_lng: float) -> list[RouteInfo]:
-        async with httpx.AsyncClient(timeout=15) as c:
-            results = await asyncio.gather(
-                *[self._route_one(c, dest_lat, dest_lng, s) for s in _TRAVEL_SCENARIOS]
-            )
-        return list(results)
-
     # ── Internal: Places API ───────────────────────────────────────────────
 
-    async def _place_one(
-        self, c: httpx.AsyncClient, lat: float, lng: float, ptype: str
-    ) -> NearbyPlace:
+    async def _place_one(self, lat: float, lng: float, ptype: str) -> NearbyPlace:
         try:
-            resp = await c.post(
+            resp = await self._http.post(
                 _PLACES_ENDPOINT,
                 json={
                     "includedTypes": [ptype],
@@ -335,7 +345,6 @@ class GoogleMapsGateway(MapsGateway):
                     "X-Goog-Api-Key": self._key,
                     "X-Goog-FieldMask": "places.displayName,places.formattedAddress",
                 },
-                timeout=10,
             )
             places = resp.json().get("places", [])
             if places:
@@ -348,28 +357,26 @@ class GoogleMapsGateway(MapsGateway):
         return NearbyPlace(place_type=ptype, name="", found=False)
 
     async def _nearby(self, lat: float, lng: float) -> list[NearbyPlace]:
-        async with httpx.AsyncClient(timeout=12) as c:
-            results = await asyncio.gather(
-                *[self._place_one(c, lat, lng, pt) for pt in _PLACE_TYPES]
-            )
+        results = await asyncio.gather(
+            *[self._place_one(lat, lng, pt) for pt in _PLACE_TYPES]
+        )
         return list(results)
 
     # ── Internal: Air Quality API ──────────────────────────────────────────
 
     async def _air_quality(self, lat: float, lng: float) -> Optional[AirQuality]:
         try:
-            async with httpx.AsyncClient(timeout=10) as c:
-                r = await c.post(
-                    _AQI_ENDPOINT,
-                    json={"location": {"latitude": lat, "longitude": lng}},
-                    params={"key": self._key},
+            r = await self._http.post(
+                _AQI_ENDPOINT,
+                json={"location": {"latitude": lat, "longitude": lng}},
+                params={"key": self._key},
+            )
+            indexes = r.json().get("indexes", [])
+            if indexes:
+                return AirQuality(
+                    aqi=indexes[0].get("aqi", 0),
+                    category=indexes[0].get("category", "Tidak diketahui"),
                 )
-                indexes = r.json().get("indexes", [])
-                if indexes:
-                    return AirQuality(
-                        aqi=indexes[0].get("aqi", 0),
-                        category=indexes[0].get("category", "Tidak diketahui"),
-                    )
         except Exception as exc:
             log.warning("Air quality error: %s", exc)
         return None
@@ -378,18 +385,20 @@ class GoogleMapsGateway(MapsGateway):
 
     async def _validate_address(self, address: str) -> Optional[str]:
         try:
-            async with httpx.AsyncClient(timeout=10) as c:
-                r = await c.post(
-                    f"{_ADDRVAL_ENDPOINT}?key={self._key}",
-                    json={"address": {"addressLines": [address], "regionCode": "ID"}},
-                )
-                return (
-                    r.json()
-                    .get("result", {})
-                    .get("address", {})
-                    .get("formattedAddress")
-                    or None
-                )
+            r = await self._http.post(
+                f"{_ADDRVAL_ENDPOINT}?key={self._key}",
+                json={"address": {"addressLines": [address], "regionCode": "ID"}},
+            )
+            return (
+                r.json()
+                .get("result", {})
+                .get("address", {})
+                .get("formattedAddress")
+                or None
+            )
         except Exception as exc:
             log.warning("Address validation error: %s", exc)
         return None
+
+    async def aclose(self) -> None:
+        await self._http.aclose()
