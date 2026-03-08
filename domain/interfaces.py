@@ -88,6 +88,16 @@ class SessionRepository(ABC):
     async def get_message_id(self, chat_id: int) -> Optional[int]: ...
 
     @abstractmethod
+    async def save_context(self, chat_id: int, text: str, source_link: str) -> None:
+        """Persist the last user input so Retry callbacks can replay it."""
+        ...
+
+    @abstractmethod
+    async def get_context(self, chat_id: int) -> Optional[dict]:
+        """Return {'text': ..., 'source_link': ...} or None."""
+        ...
+
+    @abstractmethod
     async def clear(self, chat_id: int) -> None: ...
 
 

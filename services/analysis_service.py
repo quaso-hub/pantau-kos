@@ -213,17 +213,36 @@ class AnalysisService:
         prefs_task = asyncio.ensure_future(self._load_prefs(chat_id))
 
         # ── Agent 1: Vision & Extractor ──────────────────────────────────────
+        # PERFORMANCE: start Agent1 AND fallback Agent2 in parallel.
+        # Agent1 needs 25-45s (Gemini + grounding). We immediately launch
+        # Agent2 with a text-derived location hint so both run concurrently.
+        # Once Agent1 returns we upgrade the hint and re-run Agent2 only if
+        # Agent1 gave a better address than what we already have.
         log.info("[Agent1] Starting Vision & Extraction | listing_id=%s", listing_id)
-        agent1_data = await self._run_agent1(text, image_bytes, source_link, phone_str, price_str)
+
+        # Quick text-based location hint for an early parallel Agent2 launch
+        text_location_hint = extract_location_from_gemini({}, "", text) or text[:80]
+        agent1_task = asyncio.ensure_future(
+            self._run_agent1(text, image_bytes, source_link, phone_str, price_str)
+        )
+        # Fire Agent2 immediately with text-derived hint (parallel with Agent1)
+        agent2_task = asyncio.ensure_future(self._run_agent2(text_location_hint))
+
+        # Wait for both agents concurrently
+        agent1_data, maps_result_preliminary = await asyncio.gather(
+            agent1_task, agent2_task, return_exceptions=False
+        )
+
         log.info("[Agent1] Done | address_raw=%r | flags=%s",
                  agent1_data.get("extracted_address_raw", ""),
                  agent1_data.get("raw_red_flags", []))
 
-        # Extract location hint from Agent 1 output
+        # Extract the best location hint now that Agent1 has finished
         location_hint = (
             agent1_data.get("extracted_address_kelurahan")
             or agent1_data.get("extracted_address_raw")
             or extract_location_from_gemini(agent1_data, str(agent1_data), text)
+            or text_location_hint
         )
 
         # Agent 1 may provide better price/phone data
@@ -236,9 +255,14 @@ class AnalysisService:
             or price_val_raw
         )
 
-        # ── Agent 2: Geospatial Evaluator ─────────────────────────────────────
-        log.info("[Agent2] Starting Geospatial lookup | location=%r", location_hint)
-        maps_result = await self._run_agent2(location_hint or text[:80])
+        # If Agent1 found a better address than the text-derived hint,
+        # re-run Agent2 with the improved address. Otherwise reuse the parallel result.
+        if location_hint and location_hint.strip() != text_location_hint.strip() and location_hint.strip():
+            log.info("[Agent2] Re-running with Agent1 address | location=%r", location_hint)
+            maps_result = await self._run_agent2(location_hint)
+        else:
+            maps_result = maps_result_preliminary
+
         km_val = self._maps.primary_distance_km(maps_result)
         log.info("[Agent2] Done | km=%s | nearby=%d | geocode=%s",
                  km_val, sum(1 for p in maps_result.nearby if p.found),
@@ -361,16 +385,18 @@ class AnalysisService:
         )
 
         # Temporarily swap system prompt for Agent 1's focused role
+        # use_thinking=False: extraction doesn't need deep reasoning — saves 15-20s
         result = await _safe_agent(
             self._gemini.analyze(
                 prompt,
                 image_bytes,
                 system_prompt=_AGENT1_SYSTEM,
                 use_grounding=True,
-                use_thinking=True,
+                use_thinking=False,    # FAST: extraction only, no thinking needed
             ),
             fallback={},
             agent_name="Agent1-Vision",
+            timeout=45.0,
         )
         if not isinstance(result, dict):
             return {}
@@ -390,6 +416,7 @@ class AnalysisService:
             self._maps.full_lookup(location_hint),
             fallback=MapsResult(),
             agent_name="Agent2-Geospatial",
+            timeout=25.0,   # Maps APIs are fast; 25s is plenty
         )
         return result or MapsResult()
 
@@ -468,6 +495,7 @@ class AnalysisService:
             ),
             fallback={},
             agent_name="Agent3-RiskAnalyst",
+            timeout=40.0,   # DeepSeek 3x45s retry would blow budget; cap at 40s
         )
         if isinstance(result, str):
             # DeepSeek returned plain text — try parse JSON from it
@@ -521,6 +549,7 @@ class AnalysisService:
             ),
             fallback=None,
             agent_name="Agent4-Synthesizer",
+            timeout=20.0,   # Synthesis is short — 20s is generous
         )
         # Agent 4 may return dict (JSON-mode Gemini) or plain text
         if isinstance(result, dict):
@@ -546,12 +575,12 @@ class AnalysisService:
             return UserPreferences()
 
 
-async def _safe_agent(coro, fallback, agent_name: str = "Agent"):
-    """Run agent coroutine with 50s timeout. Log failure and return fallback."""
+async def _safe_agent(coro, fallback, agent_name: str = "Agent", timeout: float = 50.0):
+    """Run agent coroutine with configurable timeout. Log failure and return fallback."""
     try:
-        return await asyncio.wait_for(coro, timeout=50.0)
+        return await asyncio.wait_for(coro, timeout=timeout)
     except asyncio.TimeoutError:
-        log.error("[%s] TIMEOUT after 50s — returning fallback", agent_name)
+        log.error("[%s] TIMEOUT after %.0fs — returning fallback", agent_name, timeout)
         return fallback
     except Exception as exc:
         log.error(

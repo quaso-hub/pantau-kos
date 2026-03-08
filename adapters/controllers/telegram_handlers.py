@@ -162,22 +162,27 @@ async def _run_analysis_with_progress(
     msg_id: Optional[int] = None
 
     try:
-        msg_id = await session_repo.get_message_id(chat_id)
-        if not msg_id:
-            boot = await bot.send_message(
-                chat_id=chat_id,
-                text=format_loading(1, 5, "SYSTEM: Booting God Eye Engine"),
-                parse_mode=ParseMode.MARKDOWN_V2,
-            )
-            msg_id = boot.message_id
-            await session_repo.save_message_id(chat_id, msg_id)
+        # ALWAYS start fresh — never reuse a msg_id from a previous analysis.
+        # Reusing stale msg_id causes edit_message_text to fail with BadRequest
+        # ("message to edit not found") when the old message is >48h old or
+        # was deleted, which silently kills the entire pipeline.
+        await session_repo.clear(chat_id)
+        msg_id = None
+
+        boot = await bot.send_message(
+            chat_id=chat_id,
+            text=format_loading(1, 5, "SYSTEM: Booting God Eye Engine"),
+            parse_mode=ParseMode.MARKDOWN_V2,
+        )
+        msg_id = boot.message_id
+        await session_repo.save_message_id(chat_id, msg_id)
 
         start_time = time.monotonic()
         spinner = 0
         result = None
 
         for step, tag, label in LOADING_STEPS:
-            if time.monotonic() - start_time > 60.0:
+            if time.monotonic() - start_time > 120.0:   # was 60s — too tight for 4-agent chain
                 await _send_timeout_warning(bot, chat_id, msg_id)
                 await session_repo.clear(chat_id)
                 return
@@ -206,7 +211,7 @@ async def _run_analysis_with_progress(
                             source=source,
                             chat_id=chat_id,
                         ),
-                        timeout=55.0,
+                        timeout=115.0,   # was 55s — now 115s to match 120s wall clock
                     )
                 except asyncio.TimeoutError:
                     await _send_timeout_warning(bot, chat_id, msg_id)
@@ -401,6 +406,12 @@ async def handle_message(
     links = re.findall(r"https?://[^\s]+", text)
     source_link = links[0] if links else ""
 
+    # Persist last input so "Retry" callback can replay without asking user to resend
+    try:
+        await container.session_repo.save_context(chat_id, text, source_link)
+    except Exception as _ctx_exc:
+        log.warning("save_context failed (non-fatal): %s", _ctx_exc)
+
     # ── Spawn background Task — handler returns immediately after this ──────
     async def _analysis_task() -> None:
         try:
@@ -470,11 +481,53 @@ async def handle_callback_query(
         return
 
     if data == "reanalyze":
-        await context.bot.send_message(
-            chat_id=allowed_chat_id,
-            text="*\\[SYSTEM\\]* Resend the listing to trigger a fresh analysis\\.",
-            parse_mode=ParseMode.MARKDOWN_V2,
-        )
+        # Retrieve last input and re-run the full analysis pipeline
+        container = _get_container(context)
+        last_ctx = None
+        try:
+            last_ctx = await container.session_repo.get_context(allowed_chat_id)
+        except Exception as _exc:
+            log.warning("get_context failed: %s", _exc)
+
+        if not last_ctx or not last_ctx.get("text"):
+            await context.bot.send_message(
+                chat_id=allowed_chat_id,
+                text=(
+                    "*\\[SYSTEM\\]* Tidak ada input tersimpan\\.\n"
+                    "Kirim ulang listing untuk memulai analisis baru\\."
+                ),
+                parse_mode=ParseMode.MARKDOWN_V2,
+            )
+            return
+
+        # Guard: drop if analysis already running for this chat
+        if _is_chat_busy(allowed_chat_id):
+            await context.bot.send_message(
+                chat_id=allowed_chat_id,
+                text="*\\[SYSTEM\\]* Analisis sedang berjalan\\. Mohon tunggu\\.",
+                parse_mode=ParseMode.MARKDOWN_V2,
+            )
+            return
+
+        _mark_chat_busy(allowed_chat_id)
+
+        async def _retry_task() -> None:
+            try:
+                await _run_analysis_with_progress(
+                    bot=context.bot,
+                    chat_id=allowed_chat_id,
+                    text=last_ctx["text"],
+                    image_bytes=None,   # image not cached — text+link replay only
+                    source_link=last_ctx.get("source_link", ""),
+                    source="retry",
+                    container=container,
+                )
+            finally:
+                _mark_chat_free(allowed_chat_id)
+                log.info("Retry task done: chat_id=%s", allowed_chat_id)
+
+        asyncio.create_task(_retry_task(), name=f"retry-chat{allowed_chat_id}")
+        log.info("Retry analysis spawned for chat_id=%s", allowed_chat_id)
         return
 
     if ":" not in data:
@@ -489,8 +542,8 @@ async def handle_callback_query(
         await context.bot.send_message(
             chat_id=allowed_chat_id,
             text=(
-                f"*\\[SYSTEM\\]* Resend listing `{escape_md(listing_id)}` "
-                "to trigger a fresh analysis\\."
+                f"*\\[SYSTEM\\]* Listing `{escape_md(listing_id)}` \\— "
+                "kirim ulang listing untuk analisis ulang\\."
             ),
             parse_mode=ParseMode.MARKDOWN_V2,
         )

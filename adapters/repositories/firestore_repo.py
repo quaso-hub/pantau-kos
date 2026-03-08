@@ -324,6 +324,43 @@ class FirestoreSessionRepo(SessionRepository):
             _mark_unavailable(exc)
             return None
 
+    async def save_context(self, chat_id: int, text: str, source_link: str) -> None:
+        """Persist last user input for Retry replay."""
+        if _db_unavailable:
+            return
+        try:
+            db = _get_db(self._cfg)
+            await db.collection("active_sessions").document(str(chat_id)).set(
+                {
+                    "last_text": text[:2000],
+                    "last_source_link": source_link,
+                    "context_saved_at": firestore.SERVER_TIMESTAMP,
+                },
+                merge=True,
+            )
+        except Exception as exc:
+            _mark_unavailable(exc)
+
+    async def get_context(self, chat_id: int) -> Optional[dict]:
+        """Return {'text': ..., 'source_link': ...} or None."""
+        if _db_unavailable:
+            return None
+        try:
+            db = _get_db(self._cfg)
+            doc = await db.collection("active_sessions").document(str(chat_id)).get()
+            if doc.exists:
+                data = doc.to_dict()
+                text = data.get("last_text")
+                if text:
+                    return {
+                        "text": text,
+                        "source_link": data.get("last_source_link", ""),
+                    }
+            return None
+        except Exception as exc:
+            _mark_unavailable(exc)
+            return None
+
     async def clear(self, chat_id: int) -> None:
         if _db_unavailable:
             return
