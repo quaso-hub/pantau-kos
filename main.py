@@ -261,6 +261,7 @@ signal.signal(signal.SIGINT, _graceful_shutdown)
 # -- Flask app -----------------------------------------------------------------
 flask_app = Flask(__name__)
 flask_app.register_blueprint(dashboard_bp)
+flask_app.config["CONTAINER"] = container  # inject untuk dashboard
 
 
 @flask_app.route("/", methods=["GET"])
