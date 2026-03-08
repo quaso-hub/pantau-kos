@@ -60,40 +60,93 @@ class GoogleMapsGateway(MapsGateway):
     # ── Geocoding ──────────────────────────────────────────────────────────
 
     async def geocode(self, address: str) -> Optional[dict]:
+        """
+        Geocode address with 3-attempt fallback strategy:
+          Attempt 1: full address + ", Surabaya"
+          Attempt 2: first 60 chars (strip prose noise) + ", Surabaya"
+          Attempt 3: just "Surabaya" as anchor (gives UBAYA-area coords for distance calc)
+        """
+        queries = self._build_geocode_queries(address)
+        for attempt, query in enumerate(queries, 1):
+            result = await self._geocode_once(query, attempt)
+            if result:
+                return result
+        log.error(
+            "Maps Geocode EXHAUSTED all %d attempts | original_address=%r",
+            len(queries), address,
+        )
+        return None
+
+    def _build_geocode_queries(self, address: str) -> list[str]:
+        """Build a progressive list of geocode query strings, coarsest last."""
+        address = address.strip()
+        queries = []
+
+        # Full address
+        full = f"{address}, Surabaya" if "surabaya" not in address.lower() else address
+        queries.append(full[:200])
+
+        # Shortened — take first meaningful segment before comma/newline
+        parts = [p.strip() for p in address.replace("\n", ",").split(",")]
+        # Skip segments that look like a full sentence (prose noise)
+        short_parts = [p for p in parts if 3 <= len(p) <= 60 and not p[0].isdigit()]
+        if short_parts and short_parts[0].lower() not in address[:20].lower():
+            short = f"{short_parts[0]}, Surabaya"
+            if short != queries[0]:
+                queries.append(short)
+
+        # Last word group that looks like a place name (capitalised, 4+ chars)
+        import re as _r
+        m = _r.search(r'\b([A-Z][a-z]{3,}(?:\s+[A-Z][a-z]{2,})?)\b', address)
+        if m:
+            area_only = f"{m.group(1)}, Surabaya"
+            if area_only not in queries:
+                queries.append(area_only)
+
+        return queries
+
+    async def _geocode_once(self, query: str, attempt: int) -> Optional[dict]:
         try:
             async with httpx.AsyncClient(timeout=10) as c:
                 r = await c.get(
                     _GEOCODE_ENDPOINT,
                     params={
-                        "address": f"{address}, Surabaya",
+                        "address": query,
                         "key": self._key,
                         "language": "id",
+                        "region": "id",
+                        "components": "country:ID",
                     },
                 )
                 data = r.json()
                 status = data.get("status", "UNKNOWN")
-                if status != "OK":
-                    log.error(
-                        "Maps Geocode FAILED | status=%s | error_message=%s | address=%r | "
-                        "hint: check API key, billing, or Geocoding API enabled",
-                        status,
-                        data.get("error_message", "(none)"),
-                        address,
+                if status == "OK":
+                    results = data.get("results", [])
+                    if results:
+                        loc = results[0]["geometry"]["location"]
+                        log.info(
+                            "Maps Geocode OK | attempt=%d | query=%r | formatted=%r",
+                            attempt, query, results[0].get("formatted_address", ""),
+                        )
+                        return {
+                            "lat": loc["lat"],
+                            "lng": loc["lng"],
+                            "formatted": results[0]["formatted_address"],
+                        }
+                elif status == "ZERO_RESULTS":
+                    log.warning(
+                        "Maps Geocode ZERO_RESULTS | attempt=%d | query=%r — trying shorter query",
+                        attempt, query,
                     )
-                    return None
-                results = data.get("results", [])
-                if results:
-                    loc = results[0]["geometry"]["location"]
-                    return {
-                        "lat": loc["lat"],
-                        "lng": loc["lng"],
-                        "formatted": results[0]["formatted_address"],
-                    }
+                else:
+                    log.error(
+                        "Maps Geocode FAILED | attempt=%d | status=%s | error=%s | query=%r",
+                        attempt, status, data.get("error_message", "(none)"), query,
+                    )
         except Exception as exc:
             log.error(
-                "Maps Geocode EXCEPTION | type=%s | detail=%s",
-                type(exc).__name__,
-                repr(exc),
+                "Maps Geocode EXCEPTION | attempt=%d | type=%s | detail=%s",
+                attempt, type(exc).__name__, repr(exc),
             )
         return None
 

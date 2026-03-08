@@ -213,37 +213,57 @@ class AnalysisService:
         prefs_task = asyncio.ensure_future(self._load_prefs(chat_id))
 
         # ── Agent 1: Vision & Extractor ──────────────────────────────────────
-        # PERFORMANCE: start Agent1 AND fallback Agent2 in parallel.
-        # Agent1 needs 25-45s (Gemini + grounding). We immediately launch
-        # Agent2 with a text-derived location hint so both run concurrently.
-        # Once Agent1 returns we upgrade the hint and re-run Agent2 only if
-        # Agent1 gave a better address than what we already have.
+        # PERFORMANCE: start Agent1 AND Agent2 in parallel.
+        # Agent2 launches immediately with the best location hint we can derive
+        # from raw text alone (no LLM). Once Agent1 returns, if it produced a
+        # better address we re-run Agent2 with the improved hint.
         log.info("[Agent1] Starting Vision & Extraction | listing_id=%s", listing_id)
 
-        # Quick text-based location hint for an early parallel Agent2 launch
-        text_location_hint = extract_location_from_gemini({}, "", text) or text[:80]
+        # Best-effort location from raw text — used as Agent2 early hint
+        text_location_hint = _extract_location_from_text(text)
+        log.info("[Agent2-early] Using text hint: %r", text_location_hint)
+
         agent1_task = asyncio.ensure_future(
             self._run_agent1(text, image_bytes, source_link, phone_str, price_str)
         )
-        # Fire Agent2 immediately with text-derived hint (parallel with Agent1)
-        agent2_task = asyncio.ensure_future(self._run_agent2(text_location_hint))
+        # Fire Agent2 in parallel ONLY if we have a usable hint
+        if text_location_hint:
+            agent2_early_task = asyncio.ensure_future(self._run_agent2(text_location_hint))
+        else:
+            agent2_early_task = None
 
-        # Wait for both agents concurrently
-        agent1_data, maps_result_preliminary = await asyncio.gather(
-            agent1_task, agent2_task, return_exceptions=False
-        )
+        # Wait for Agent1 to finish
+        agent1_data = await agent1_task
 
         log.info("[Agent1] Done | address_raw=%r | flags=%s",
                  agent1_data.get("extracted_address_raw", ""),
                  agent1_data.get("raw_red_flags", []))
 
         # Extract the best location hint now that Agent1 has finished
-        location_hint = (
-            agent1_data.get("extracted_address_kelurahan")
-            or agent1_data.get("extracted_address_raw")
-            or extract_location_from_gemini(agent1_data, str(agent1_data), text)
-            or text_location_hint
-        )
+        location_hint = _best_location(agent1_data, text)
+
+        # Decide whether to use early Agent2 result or re-run with better hint
+        if agent2_early_task is not None and not location_hint:
+            # No better hint from Agent1 — just wait for the early run
+            maps_result = await agent2_early_task
+        elif location_hint and _hints_differ(location_hint, text_location_hint):
+            # Agent1 gave a significantly better address — re-run Agent2 with it
+            if agent2_early_task is not None and not agent2_early_task.done():
+                agent2_early_task.cancel()   # cancel the stale early run
+            log.info("[Agent2] Re-running with Agent1 address: %r", location_hint)
+            maps_result = await self._run_agent2(location_hint)
+        elif agent2_early_task is not None:
+            # Same or similar hint — reuse the early parallel result
+            maps_result = await agent2_early_task
+        else:
+            # No hint at all — run Agent2 now with whatever we have
+            log.warning("[Agent2] No location hint from text or Agent1 — trying raw text")
+            maps_result = await self._run_agent2(location_hint or text[:120])
+
+        km_val = self._maps.primary_distance_km(maps_result)
+        log.info("[Agent2] Done | km=%s | nearby=%d | geocode=%s",
+                 km_val, sum(1 for p in maps_result.nearby if p.found),
+                 bool(maps_result.geocode))
 
         # Agent 1 may provide better price/phone data
         phone_str_a1 = (
@@ -254,19 +274,6 @@ class AnalysisService:
             agent1_data.get("extracted_price_numeric")
             or price_val_raw
         )
-
-        # If Agent1 found a better address than the text-derived hint,
-        # re-run Agent2 with the improved address. Otherwise reuse the parallel result.
-        if location_hint and location_hint.strip() != text_location_hint.strip() and location_hint.strip():
-            log.info("[Agent2] Re-running with Agent1 address | location=%r", location_hint)
-            maps_result = await self._run_agent2(location_hint)
-        else:
-            maps_result = maps_result_preliminary
-
-        km_val = self._maps.primary_distance_km(maps_result)
-        log.info("[Agent2] Done | km=%s | nearby=%d | geocode=%s",
-                 km_val, sum(1 for p in maps_result.nearby if p.found),
-                 bool(maps_result.geocode))
 
         # ── Await prefs (should be ready by now) ──────────────────────────────
         prefs = await prefs_task
@@ -590,4 +597,96 @@ async def _safe_agent(coro, fallback, agent_name: str = "Agent", timeout: float 
             repr(exc),
         )
         return fallback
+
+
+# ── Location extraction helpers ───────────────────────────────────────────────
+
+import re as _re  # noqa: E402 — kept at module bottom to avoid circular issues
+
+_SURABAYA_AREAS = [
+    # Kecamatan / kelurahan populer Surabaya
+    "Rungkut", "Tenggilis", "Kalirungkut", "Gunung Anyar", "Sukolilo",
+    "Mulyorejo", "Gubeng", "Wonokromo", "Wonocolo", "Gayungan",
+    "Wiyung", "Karangpilang", "Dukuh Pakis", "Sawahan", "Tegalsari",
+    "Bubutan", "Genteng", "Simokerto", "Kenjeran", "Bulak",
+    "Semampir", "Pabean Cantikan", "Krembangan", "Asemrowo", "Benowo",
+    "Sambikerep", "Lakarsantri", "Tandes", "Sukomanunggal", "Jambangan",
+    "Gayung", "Menanggal", "Pakuwon", "Citraland", "Darmo",
+    "Menganti", "Driyorejo", "Waru", "Gedangan", "Sidoarjo",
+]
+
+
+def _extract_location_from_text(text: str) -> str:
+    """
+    Extract the best possible location hint from raw listing text.
+
+    Priority order:
+    1. Explicit street/kelurahan patterns (Jl., Kel., Kec., etc.)
+    2. Known Surabaya area names mentioned in text
+    3. Empty string (caller will skip Agent2 early launch)
+
+    Never returns raw prose — only clean location-like strings.
+    """
+    if not text:
+        return ""
+
+    # 1. Street address pattern
+    m = _re.search(
+        r'((?:Jl\.|Jalan|Jln\.?)\s+[A-Za-z0-9][^\n,]{3,80})',
+        text, _re.IGNORECASE
+    )
+    if m:
+        return m.group(1).strip()[:120]
+
+    # 2. Kelurahan / Kecamatan explicit label
+    m = _re.search(
+        r'(?:Kel(?:urahan)?\.?|Kec(?:amatan)?\.?)\s+([A-Za-z ]{4,60})',
+        text, _re.IGNORECASE
+    )
+    if m:
+        return m.group(1).strip()
+
+    # 3. "dekat / area / kawasan X" pattern
+    m = _re.search(
+        r'(?:dekat|deket|area|kawasan|di|lokasi)[^a-zA-Z]{0,5}'
+        r'([A-Z][a-zA-Z](?:[a-zA-Z ]){3,50})',
+        text
+    )
+    if m:
+        candidate = m.group(1).strip()
+        if len(candidate) >= 4:
+            return candidate
+
+    # 4. Known Surabaya area name directly in text
+    for area in _SURABAYA_AREAS:
+        if _re.search(r'\b' + _re.escape(area) + r'\b', text, _re.IGNORECASE):
+            return area
+
+    return ""
+
+
+def _best_location(agent1_data: dict, text: str) -> str:
+    """
+    Return the cleanest location string from Agent1 output.
+    Falls back to text extraction if Agent1 gave nothing useful.
+    """
+    candidates = [
+        agent1_data.get("extracted_address_kelurahan", ""),
+        agent1_data.get("extracted_address_raw", ""),
+    ]
+    for c in candidates:
+        if c and isinstance(c, str) and len(c.strip()) >= 4:
+            return c.strip()
+    # Agent1 gave nothing — fall back to text extraction
+    return _extract_location_from_text(text)
+
+
+def _hints_differ(a: str, b: str) -> bool:
+    """
+    True if two location hints are meaningfully different —
+    i.e. Agent1 gave us something better than the text fallback.
+    """
+    if not a or not b:
+        return bool(a)  # if one is empty, they "differ" only if a is non-empty
+    return a.strip().lower() != b.strip().lower()
 
