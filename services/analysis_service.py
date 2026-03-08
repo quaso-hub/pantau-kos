@@ -129,7 +129,11 @@ _AGENT3_SYSTEM = textwrap.dedent("""
     - JANGAN flag "tidak ada kontak" jika field REGEX_PHONES sudah ada nomor
     - JANGAN flag "alamat tidak diketahui" jika field REGEX_ADDRESS sudah ada teks
     - JANGAN flag "informasi kamar kosong" — semua iklan kos PASTI kamarnya tersedia
-    - Hanya flag hal yang BENAR-BENAR anomali: harga jauh di bawah/atas pasar, nomor terdaftar penipuan, foto palsu, dll.
+    - JANGAN flag "tidak ada foto" atau "foto tidak tersedia" atau "VISION_DATA kosong"
+      — pengguna mungkin hanya tidak mengirim foto, itu BUKAN tanda penipuan
+    - JANGAN flag "tidak ada verifikasi foto" — sama dengan di atas
+    - Hanya flag hal yang BENAR-BENAR anomali: harga jauh di bawah/atas pasar,
+      nomor terdaftar penipuan, deskripsi kontradiktif, foto jelas palsu/stock.
 
     INPUT yang kamu terima:
     - REGEX_FACTS: data keras langsung dari regex (selalu akurat)
@@ -536,7 +540,7 @@ class AnalysisService:
             "=== WEB_INTEL (dari pencarian internet, mungkin kosong jika timeout) ===\n"
             f"{web_intel_text[:1000] if web_intel_text else '(timeout atau tidak tersedia)'}\n\n"
             "=== GEO_DATA ===\n"
-            f"Jarak ke UBAYA: {f'{km_val:.1f} km' if km_val else 'tidak diketahui'}\n"
+            f"Jarak ke UBAYA: {f'{km_val:.1f} km' if km_val else 'tidak diketahui (geocode gagal — JANGAN kurangi skor karena ini)'}\n"
             f"Rute: {routes_str}\n"
             f"Fasilitas sekitar: {nearby_str}\n"
             f"Kualitas udara: {air_str}\n\n"
@@ -546,7 +550,9 @@ class AnalysisService:
             "INGAT: Jangan flag 'harga tidak ada' jika REGEX_PRICE sudah ada. "
             "Jangan flag 'tidak ada kontak' jika REGEX_PHONES sudah ada. "
             "Jangan flag 'alamat tidak diketahui' jika REGEX_ADDRESS sudah ada. "
-            "Jangan flag 'kamar kosong' — semua iklan kos PASTI kamarnya tersedia.\n\n"
+            "Jangan flag 'kamar kosong' — semua iklan kos PASTI kamarnya tersedia. "
+            "PENTING: Jangan flag ketiadaan foto/VISION_DATA kosong — "
+            "pengguna mungkin tidak mengirim foto, itu bukan tanda penipuan.\n\n"
             "Lakukan analisis forensik. Kembalikan JSON sesuai schema."
         )
 
@@ -662,30 +668,56 @@ _SURABAYA_AREAS = [
 def _extract_location_from_text(text: str) -> str:
     """
     Extract address/location from raw listing text.
-    Priority: full street address > kelurahan/kecamatan > known area name.
+    Priority: explicit label > named street > area+number+district > known area name.
+
+    Handles formats like:
+      - "Jl. Medayu Utara No.5, Rungkut Surabaya"
+      - "Alamat: Medayu Utara VIIIA/No.146A Pagar Hitam, Rungkut Surabaya"
+      - "Medayu Utara VIIIA/No.146A Pagar Hitam, Rungkut Surabaya"
+      - "di Rungkut Surabaya"
     """
     if not text:
         return ""
 
-    # 1. Full street address with number: "Medayu Utara VIIIA/No.146A Pagar Hitam, Rungkut"
+    # 1. Explicit label: "Alamat: ...", "Lokasi: ...", "Jl./Jalan ..."
     m = _re.search(
-        r'(?:Jl\.|Jalan|Jln\.?|Lokasi\s*:|Alamat\s*:)\s*([^\n]{5,120})',
+        r'(?:Alamat|Lokasi|Jl\.|Jalan|Jln\.?)\s*:?\s*([^\n]{5,150})',
         text, _re.IGNORECASE
     )
     if m:
-        return m.group(1).strip()[:120]
+        return m.group(1).strip()[:150]
 
-    # 2. Pattern: "No.146A / nama jalan / area"
+    # 2. Area+Roman-numeral+No pattern on a SINGLE LINE
+    # e.g. "Medayu Utara VIIIA/No.146A Pagar Hitam, Rungkut Surabaya"
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        m = _re.match(
+            r'^([A-Z][a-zA-Z]+(?:\s+[A-Za-z]+){0,3}'  # area name: "Medayu Utara"
+            r'(?:\s+[IVXLCDM]+[A-Za-z0-9]*)?'          # optional roman numeral: "VIIIA"
+            r'\s*(?:No\.?|\/)\s*[\w\/]+'                # "No.146A" or "/146A"
+            r'[^,\n]{0,60}'                              # rest of street
+            r'(?:,\s*[A-Za-z\s]{3,40})?)',              # optional ", Rungkut Surabaya"
+            line, _re.IGNORECASE
+        )
+        if m:
+            candidate = m.group(1).strip()
+            if 8 <= len(candidate) <= 150:
+                return candidate
+
+    # 3. "Area, Kecamatan Surabaya" — comma-separated neighborhood+district
     m = _re.search(
-        r'([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)*\s+(?:No\.|Nomor|\/)\s*[\w\/]+[^\n]{0,60})',
-        text
+        r'([A-Z][a-zA-Z\s]{3,40},\s*(?:Rungkut|Sukolilo|Gubeng|Mulyorejo|Tenggilis|'
+        r'Wonocolo|Wonokromo|Gayungan|Gunung Anyar|Kalirungkut)[^,\n]{0,40})',
+        text, _re.IGNORECASE
     )
     if m:
         candidate = m.group(1).strip()
-        if 5 <= len(candidate) <= 120:
+        if 6 <= len(candidate) <= 120:
             return candidate
 
-    # 3. Kelurahan / Kecamatan explicit label
+    # 4. Kelurahan / Kecamatan explicit label
     m = _re.search(
         r'(?:Kel(?:urahan)?\.?|Kec(?:amatan)?\.?)\s+([A-Za-z ]{4,60})',
         text, _re.IGNORECASE
@@ -693,7 +725,18 @@ def _extract_location_from_text(text: str) -> str:
     if m:
         return m.group(1).strip()
 
-    # 4. Known Surabaya area name in text
+    # 5. "dekat / di / area X" followed by capitalized location
+    _NON_LOCATIONS = {"ubaya", "kampus", "toll", "tol", "pasar", "mall", "rs", "rsud"}
+    m = _re.search(
+        r'(?:dekat|deket|di|area|kawasan|lokasi)\s+([A-Z][a-zA-Z\s]{3,50})',
+        text
+    )
+    if m:
+        candidate = m.group(1).strip().split('\n')[0].split(',')[0].strip()
+        if 4 <= len(candidate) <= 60 and candidate.lower() not in _NON_LOCATIONS:
+            return candidate
+
+    # 6. Known Surabaya area name anywhere in text
     for area in _SURABAYA_AREAS:
         if _re.search(r'\b' + _re.escape(area) + r'\b', text, _re.IGNORECASE):
             return area

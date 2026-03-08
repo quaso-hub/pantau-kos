@@ -38,10 +38,38 @@ def format_loading(step: int, total: int, label: str, spinner_idx: int = 0) -> s
 def _fmt_price(val: Optional[float], raw_prices: list) -> str:
     if val:
         formatted = f"Rp{int(val):,}".replace(",", ".")
-        return f"`price: {formatted} \\(scraper\\)`"
+        return f"`price: {formatted}/bulan`"
     if raw_prices:
         return f"`price: {escape_md(raw_prices[0])} \\(raw\\)`"
     return "`price: N/A`"
+
+
+def _fmt_budget_status(budget_status: Optional[str]) -> str:
+    """Clean budget status — strip emoji, show concise label."""
+    if not budget_status:
+        return "`budget: unknown`"
+    s = str(budget_status)
+    # Strip leading emoji (✅ ❌ ⚠️ ❓ etc.)
+    s = re.sub(r'^[\U00010000-\U0010ffff\u2000-\u2fff\u2600-\u26ff\u2700-\u27bf\s]+', '', s).strip()
+    # Shorten: "Rp 950,000/bulan — di atas budget" → "di atas budget (Rp950.000)"
+    match = re.match(r'Rp\s*([\d\.,]+).*?[—\-]\s*(.+)', s)
+    if match:
+        price_part = match.group(1).replace(',', '.')
+        verdict = match.group(2).strip()
+        label = escape_md(f"{verdict} (Rp{price_part})")
+    else:
+        label = escape_md(s[:60])
+    # Add status icon based on content
+    sl = s.lower()
+    if "sesuai" in sl or "dalam" in sl:
+        icon = "✅"
+    elif "atas" in sl or "mahal" in sl:
+        icon = "❌"
+    elif "bawah" in sl or "murah" in sl:
+        icon = "💚"
+    else:
+        icon = "⚠️"
+    return f"`budget: {label}` {icon}"
 
 
 def _score_label(score: Optional[int]) -> str:
@@ -68,11 +96,10 @@ def _fraud_label(risk: Optional[str]) -> str:
 def _financials_section(result: AnalysisResult) -> str:
     lines = ["*\\[FINANCIALS\\]*"]
     lines.append(_fmt_price(result.price_value, result.prices or []))
-    budget = escape_md(result.budget_status or "unknown")
-    lines.append(f"`budget\\_status: {budget}`")
+    lines.append(_fmt_budget_status(result.budget_status))
     if result.price_score is not None:
         ps = escape_md(str(result.price_score))
-        lines.append(f"`price\\_score: {ps}/10 \\(deepseek\\)`")
+        lines.append(f"`price\\_score: {ps}/10`")
     return "\n".join(lines)
 
 
@@ -81,11 +108,12 @@ def _logistics_section(result: AnalysisResult) -> str:
     maps: MapsResult = result.maps or MapsResult()
     if result.distance_km_val is not None:
         km = escape_md(f"{result.distance_km_val:.1f}")
-        lines.append(f"\\- `distance: {km} km to UBAYA \\(maps\\)`")
+        lines.append(f"\\- `distance: {km} km ke UBAYA`")
+        jarak = escape_md(result.jarak_status or "")
+        if jarak:
+            lines.append(f"\\- `jarak: {jarak}`")
     else:
-        lines.append("\\- `distance: unavailable`")
-    jarak = escape_md(result.jarak_status or "unknown")
-    lines.append(f"\\- `jarak\\_status: {jarak}`")
+        lines.append("\\- `distance: belum bisa dihitung \\(geocode gagal\\)`")
     if result.location_hint:
         lines.append(f"\\- `location: {escape_md(result.location_hint)}`")
     if maps.geocode and isinstance(maps.geocode, dict):
@@ -103,7 +131,7 @@ def _logistics_section(result: AnalysisResult) -> str:
     if maps.air_quality:
         aqi = escape_md(str(maps.air_quality.aqi))
         cat = escape_md(maps.air_quality.category)
-        lines.append(f"\\- `air: AQI {aqi} -- {cat}`")
+        lines.append(f"\\- `air: AQI {aqi} — {cat}`")
     return "\n".join(lines)
 
 
@@ -156,12 +184,14 @@ def _verdict_section(result: AnalysisResult) -> str:
 def _build_warnings(result: AnalysisResult) -> list:
     warnings = []
     maps: MapsResult = result.maps or MapsResult()
-    if not maps.geocode:
-        warnings.append("MAPS_GEOCODE_UNAVAILABLE")
-    if not result.gemini_data:
-        warnings.append("GEMINI_VISION_FAILED")
-    if not result.deepseek_raw:
-        warnings.append("DEEPSEEK_SCORING_FAILED")
+    # Only warn about geocode if we also have no location at all
+    if not maps.geocode and not result.location_hint and not result.distance_km_val:
+        warnings.append("MAPS_GEOCODE_UNAVAILABLE — lokasi tidak dapat diverifikasi")
+    elif not maps.geocode and result.distance_km_val is None:
+        warnings.append("MAPS_GEOCODE_UNAVAILABLE — jarak ke UBAYA tidak bisa dihitung")
+    # Only warn about DeepSeek if scoring truly failed (no fraud_risk set)
+    if not result.deepseek_raw and not result.fraud_risk:
+        warnings.append("RISK_SCORING_FAILED")
     return warnings
 
 
