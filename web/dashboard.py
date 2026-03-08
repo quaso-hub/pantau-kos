@@ -162,10 +162,41 @@ def detail(listing_id: str):
     if not listing:
         listing = {"id": listing_id}
     else:
-        # Normalise field names sehingga template bisa pakai .price, .area, dll.
+        # Normalise field names so template can use .price, .area, etc.
         listing.setdefault("id", listing.get("listing_id", listing_id))
-        listing.setdefault("price", listing.get("price_value"))
+        listing.setdefault("price", listing.get("price_value") or 0)
         listing.setdefault("area", listing.get("location"))
+
+        # Normalize air_quality: may be dict or None
+        aq = listing.get("air_quality")
+        if isinstance(aq, dict):
+            listing["aqi_value"]    = aq.get("aqi")
+            listing["aqi_category"] = aq.get("category", "")
+        else:
+            listing["aqi_value"]    = None
+            listing["aqi_category"] = ""
+
+        # Normalize geocode: may be GeoPoint, dict, or None
+        gc = listing.get("geocode")
+        if gc is not None:
+            try:
+                # google.cloud.firestore GeoPoint has .latitude/.longitude
+                listing["geo_lat"] = float(getattr(gc, "latitude",  None) or gc.get("lat") or gc.get("latitude",  0))
+                listing["geo_lng"] = float(getattr(gc, "longitude", None) or gc.get("lng") or gc.get("longitude", 0))
+                listing["has_geo"] = True
+            except Exception:
+                listing["has_geo"] = False
+                listing["geo_lat"] = listing["geo_lng"] = 0.0
+        else:
+            listing["has_geo"] = False
+            listing["geo_lat"] = listing["geo_lng"] = 0.0
+
+        # Phones: ensure list
+        phones = listing.get("phones")
+        if phones is None:
+            listing["phones"] = []
+        elif isinstance(phones, str):
+            listing["phones"] = [phones]
 
     return render_template("detail.html", listing=listing)
 

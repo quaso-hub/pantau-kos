@@ -223,10 +223,11 @@
             📞 {{ l.phones | length }}
           </span>
           {% endif %}
-          {% if l.air_quality and l.air_quality.aqi %}
+          {% if l.air_quality is mapping and l.air_quality.get('aqi') %}
           <span class="hidden lg:inline-flex badge
-            {% if l.air_quality.aqi <= 50 %}fraud-low{% elif l.air_quality.aqi <= 100 %}fraud-medium{% else %}fraud-high{% endif %}">
-            AQI {{ l.air_quality.aqi }}
+            {% set _aqi = l.air_quality.get('aqi', 999) %}
+            {% if _aqi <= 50 %}fraud-low{% elif _aqi <= 100 %}fraud-medium{% else %}fraud-high{% endif %}">
+            AQI {{ l.air_quality.get('aqi') }}
           </span>
           {% endif %}
           {% if l.fraud_risk %}
