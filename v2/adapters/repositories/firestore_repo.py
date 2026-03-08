@@ -154,6 +154,18 @@ class FirestoreListingRepo(ListingRepository):
             _mark_unavailable(exc)
             return 0
 
+    async def delete(self, listing_id: str) -> None:
+        """Hard-delete a listing document from Firestore."""
+        if _db_unavailable:
+            return
+        try:
+            db = _get_db(self._cfg)
+            await db.collection("kos_listings").document(listing_id).delete()
+            log.info("Deleted listing %s", listing_id)
+        except Exception as exc:
+            log.warning("Firestore delete failed for %s: %s", listing_id, exc)
+            raise
+
 
 # ── PreferencesRepository ─────────────────────────────────────────────────────
 

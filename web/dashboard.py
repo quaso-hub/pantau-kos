@@ -81,6 +81,13 @@ def _get_listings(filters: dict, sort_by: str, sort_dir: str) -> list[dict]:
         }
         sort_key = key_map.get(sort_by, key_map["score"])
         results.sort(key=sort_key, reverse=reverse)
+        
+        # Normalize field names untuk template compatibility
+        for item in results:
+            item.setdefault("id", item.get("listing_id"))
+            item.setdefault("price", item.get("price_value"))
+            item.setdefault("area", item.get("location"))
+        
         return results
     except Exception as exc:
         log.warning("_get_listings error: %s", exc)
@@ -161,4 +168,23 @@ def detail(listing_id: str):
         listing.setdefault("area", listing.get("location"))
 
     return render_template("detail.html", listing=listing)
+
+
+@dashboard_bp.route("/api/delete/<listing_id>", methods=["POST", "DELETE"])
+def api_delete_listing(listing_id: str):
+    """
+    Hard-delete listing dari Firestore.
+    Response: {"ok": true/false, "deleted_id": "..."}
+    """
+    container = _get_container()
+    if not container:
+        return jsonify({"ok": False, "error": "Container not available"}), 503
+    
+    try:
+        _run_async(container.listing_repo.delete(listing_id))
+        log.info("Listing %s deleted via dashboard", listing_id)
+        return jsonify({"ok": True, "deleted_id": listing_id})
+    except Exception as exc:
+        log.error("Delete failed for %s: %s", listing_id, exc)
+        return jsonify({"ok": False, "error": str(exc)}), 500
 
