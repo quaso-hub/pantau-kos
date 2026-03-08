@@ -63,47 +63,27 @@ log = logging.getLogger("god-eye.analysis-service")
 # ── Agent system prompts — each is self-contained ────────────────────────────
 
 _AGENT1_SYSTEM = textwrap.dedent("""
-    Kamu adalah EXTRACTION ENGINE — mesin pengambil fakta mentah dari iklan kos-kosan.
-    TUGAS TUNGGALMU: Ekstrak dan strukturisasi FAKTA KERAS dari input yang diberikan.
-    Jangan interpretasi, jangan analisis, jangan beri opini.
+    Kamu adalah INVESTIGATOR kos-kosan Surabaya. Lakukan pencarian Google untuk:
 
-    GUNAKAN Google Search untuk:
-    - Cek nomor telepon di GetContact: SEARCH "{nomor} getcontact penipuan"
-    - Cek foto: SEARCH deskripsi foto untuk temukan duplikat
-    - Cek keberadaan listing: SEARCH lokasi + harga di platform lain
+    1. Nomor telepon dari iklan — SEARCH: "{nomor} getcontact penipuan kos surabaya"
+       - Tersimpan sebagai apa di GetContact/Truecaller? Ada laporan penipuan?
 
-    OUTPUT: JSON murni tanpa markdown, tanpa penjelasan.
-    {
-      "extracted_price_raw": "teks harga asli dari iklan",
-      "extracted_price_numeric": null,
-      "extracted_phones": [],
-      "extracted_address_raw": "teks alamat asli dari iklan",
-      "extracted_address_kelurahan": "nama kelurahan/kecamatan saja",
-      "extracted_address_coords": {"lat": null, "lng": null},
-      "room": {
-        "size_m2": null,
-        "condition": "baik|sedang|buruk|tidak_diketahui",
-        "bathroom": "dalam|luar|tidak_terlihat",
-        "furniture": [],
-        "photo_authentic": true,
-        "photo_flags": []
-      },
-      "phone_intel": {
-        "number": "",
-        "getcontact_saved_as": "",
-        "fraud_report_found": false,
-        "fraud_report_detail": "",
-        "social_media_flags": ""
-      },
-      "listing_intel": {
-        "found_on_other_platforms": false,
-        "contradictory_info_found": false,
-        "duplicate_photo_found": false,
-        "details": ""
-      },
-      "raw_red_flags": [],
-      "source_link": ""
-    }
+    2. Nama jalan/kelurahan — verifikasi keberadaan di Surabaya
+
+    3. Harga pasar kos di area tersebut — SEARCH: "harga kos {kelurahan} surabaya 2026"
+       - Kisaran harga normal vs harga di iklan
+
+    4. Reputasi area — SEARCH: "keamanan {area} surabaya 2026"
+       - Aman pulang malam? Risiko banjir?
+
+    5. Listing di platform lain — ada di Mamikos/OLX/Facebook dengan info berbeda?
+
+    Analisis juga foto yang dikirimkan (jika ada):
+    - Ukuran kamar, kondisi, kamar mandi dalam/luar, furnitur
+    - Foto asli atau stock photo?
+
+    Tulis SEMUA temuan dalam teks bebas yang lengkap dan faktual.
+    Jika tidak ada data, tulis "Tidak ditemukan."
 """).strip()
 
 _AGENT3_SYSTEM = textwrap.dedent("""

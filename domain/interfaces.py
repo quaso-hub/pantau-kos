@@ -115,13 +115,16 @@ class AIGateway(ABC):
         image_bytes: Optional[bytes] = None,
         system_prompt: Optional[str] = None,
         use_grounding: bool = True,
-        use_thinking: bool = True,
+        use_thinking: bool = False,
+        json_schema: Optional[dict] = None,
     ) -> dict | str:
         """
         Send prompt (+ optional image) to the AI service.
         - system_prompt: override default system instruction per-call (for multi-agent)
         - use_grounding: enable Google Search grounding (Gemini only)
+          NOTE: two-phase approach used — Phase 1 grounding (plain text), Phase 2 JSON extraction
         - use_thinking: enable thinking_level=high (Gemini only)
+        - json_schema: pin output schema for Phase 2 / single-phase JSON calls
         Return parsed dict (Gemini) or raw string (DeepSeek).
         """
         ...

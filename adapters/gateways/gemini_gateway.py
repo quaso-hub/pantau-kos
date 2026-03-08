@@ -1,13 +1,25 @@
 """
-adapters/gateways/gemini_gateway.py
+adapters/gateways/gemini_gateway.py  (v4.2)
 Concrete Gemini implementation of AIGateway.
-Preserves: vision, Google Search grounding, thinking_level=high, JSON response, 3x retry.
+
+KEY FIX (v4.2):
+  response_mime_type="application/json" is INCOMPATIBLE with google_search grounding.
+  When grounding tools are active, the model returns narrative text (not JSON) and
+  json.loads() fails silently → {"raw": ...} is returned → all extraction fields are
+  missing → price/address/fraud-score all wrong.
+
+  SOLUTION — two-phase approach:
+    Phase 1 (grounding): google_search enabled, plain text response → collects web facts
+    Phase 2 (extraction): NO tools, response_mime_type=JSON + response_json_schema → structured output
+
+  Non-grounded calls (Agent4 synthesis) use single-phase JSON directly.
 """
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
+import re
 from typing import Optional
 
 from google import genai
@@ -18,82 +30,112 @@ from infrastructure.config import GeminiConfig
 
 log = logging.getLogger("god-eye.gemini")
 
+# ── Legacy / fallback system prompt (used by Agent4 single-phase calls) ────────
 SYSTEM_PROMPT = """
 Kamu analis properti + investigator penipuan untuk mahasiswa UBAYA Surabaya 2026.
 UBAYA Tenggilis: Jl. Raya Kalirungkut (-7.3275, 112.7858).
-
-GUNAKAN Google Search untuk semua poin yang butuh info realtime:
-
-1. EKSTRAKSI LOKASI — nama jalan/kelurahan dari teks atau foto, estimasi koordinat
-
-2. ANALISIS FOTO (jika ada gambar)
-   - Estimasi ukuran kamar (m²), kondisi, kamar mandi dalam/luar
-   - Furnitur yang terlihat, foto asli atau stock photo?
-
-3. CEK NOMOR TELEPON — SEARCH: "{nomor} getcontact penipuan kos surabaya"
-   - Tersimpan sebagai apa di GetContact/Truecaller?
-   - Ada laporan penipuan? Ada di IG/Twitter/Threads?
-
-4. CEK LISTING DI INTERNET — SEARCH: foto/harga/lokasi spesifik
-   - Listing muncul di platform lain dengan info berbeda?
-   - Foto pernah dipakai untuk penipuan?
-
-5. REPUTASI AREA — SEARCH: "keamanan {area} surabaya 2026"
-   - Tingkat kriminalitas, aman pulang malam 21.00, risiko banjir
-
-6. HARGA PASAR — SEARCH: "harga kos {area} surabaya 2026"
-   - Kisaran normal dan verdict: murah/sesuai/mahal
-
-7. RED FLAGS — harga terlalu murah, template scammer, akun baru
-
-Kembalikan JSON murni tanpa markdown:
-{
-  "location_text": "nama lokasi",
-  "location_kelurahan": "nama kelurahan saja",
-  "location_coords": {"lat": -7.xxx, "lng": 112.xxx},
-  "room": {
-    "size_m2": null,
-    "condition": "baik|sedang|buruk",
-    "bathroom": "dalam|luar|tidak_terlihat",
-    "furniture": [],
-    "photo_authentic": true,
-    "photo_flags": []
-  },
-  "phone_check": {
-    "number": "",
-    "getcontact_name": "",
-    "fraud_reports": "",
-    "trusted": true,
-    "social_media_findings": ""
-  },
-  "listing_web_check": {
-    "found_elsewhere": false,
-    "social_complaints": "",
-    "duplicate_photos": false
-  },
-  "area": {
-    "crime_level": "rendah|sedang|tinggi",
-    "safe_night": true,
-    "flood_risk": false,
-    "notes": ""
-  },
-  "price_market": {
-    "market_range": "Rp X - Y",
-    "verdict": "murah|sesuai|mahal"
-  },
-  "post_flags": [],
-  "authenticity": "tinggi|sedang|rendah"
-}
+Kembalikan JSON sesuai schema yang diminta. Isi SETIAP field yang datanya tersedia.
 """
+
+# ── Agent1 Phase 1: grounding/search — free-form text, tools enabled ──────────
+_AGENT1_SEARCH_SYSTEM = """
+Kamu adalah INVESTIGATOR kos-kosan Surabaya. Lakukan pencarian Google untuk:
+
+1. Nomor telepon dari iklan — SEARCH: "{nomor} getcontact penipuan kos surabaya"
+   - Tersimpan sebagai apa di GetContact/Truecaller? Ada laporan penipuan?
+
+2. Nama jalan/kelurahan — SEARCH: verifikasi keberadaan di Surabaya
+
+3. Harga pasar kos di area tersebut — SEARCH: "harga kos {kelurahan} surabaya 2026"
+   - Kisaran harga normal, verdict murah/sesuai/mahal
+
+4. Reputasi area — SEARCH: "keamanan {area} surabaya 2026"
+   - Aman pulang malam? Risiko banjir?
+
+5. Cek foto/listing di internet — ada di platform lain dengan info berbeda?
+
+Tulis SEMUA temuan dalam teks bebas yang lengkap dan faktual.
+Jika tidak ada data, tulis "Tidak ditemukan."
+"""
+
+# ── Agent1 Phase 2: structured extraction — JSON mode, no tools ───────────────
+_AGENT1_EXTRACT_SYSTEM = """
+Kamu adalah DATA EXTRACTION ENGINE. Baca iklan dan hasil investigasi lalu ekstrak semua fakta.
+
+ATURAN WAJIB:
+- Isi SETIAP field yang datanya ada. JANGAN biarkan field kosong jika data tersedia.
+- extracted_price_raw: kutip harga persis dari teks (contoh: "950rb/bulan")
+- extracted_price_numeric: konversi ke angka (950rb → 950000, 1.2jt → 1200000)
+- extracted_address_raw: alamat persis dari iklan (contoh: "Medayu Utara VIIIA/No.146A Pagar Hitam")
+- extracted_address_kelurahan: kelurahan/kecamatan saja (contoh: "Rungkut")
+- extracted_phones: SEMUA nomor HP yang ditemukan
+- room.photo_authentic: false jika foto terlihat stock-photo atau terlalu sempurna
+- raw_red_flags: [] jika normal, isi jika ada tanda bahaya
+
+Kembalikan JSON sesuai schema. WAJIB isi semua field yang datanya ada dalam teks.
+"""
+
+# ── Agent1 JSON schema — pins Phase 2 extraction output ───────────────────────
+_AGENT1_JSON_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "extracted_price_raw":         {"type": ["string", "null"]},
+        "extracted_price_numeric":     {"type": ["number", "null"]},
+        "extracted_phones":            {"type": "array", "items": {"type": "string"}},
+        "extracted_address_raw":       {"type": ["string", "null"]},
+        "extracted_address_kelurahan": {"type": ["string", "null"]},
+        "extracted_address_coords": {
+            "type": "object",
+            "properties": {
+                "lat": {"type": ["number", "null"]},
+                "lng": {"type": ["number", "null"]},
+            },
+        },
+        "room": {
+            "type": "object",
+            "properties": {
+                "size_m2":         {"type": ["number", "null"]},
+                "condition":       {"type": ["string", "null"]},
+                "bathroom":        {"type": ["string", "null"]},
+                "furniture":       {"type": "array", "items": {"type": "string"}},
+                "photo_authentic": {"type": "boolean"},
+                "photo_flags":     {"type": "array", "items": {"type": "string"}},
+            },
+        },
+        "phone_intel": {
+            "type": "object",
+            "properties": {
+                "number":              {"type": ["string", "null"]},
+                "getcontact_saved_as": {"type": ["string", "null"]},
+                "fraud_report_found":  {"type": "boolean"},
+                "fraud_report_detail": {"type": ["string", "null"]},
+                "social_media_flags":  {"type": ["string", "null"]},
+            },
+        },
+        "listing_intel": {
+            "type": "object",
+            "properties": {
+                "found_on_other_platforms": {"type": "boolean"},
+                "contradictory_info_found": {"type": "boolean"},
+                "duplicate_photo_found":    {"type": "boolean"},
+                "details":                  {"type": ["string", "null"]},
+            },
+        },
+        "raw_red_flags": {"type": "array", "items": {"type": "string"}},
+        "source_link":   {"type": ["string", "null"]},
+    },
+}
 
 
 class GeminiGateway(AIGateway):
     """
     Concrete Gemini Vision adapter.
 
-    Supports per-call system_prompt override so multi-agent pipeline
-    can pass Agent1/Agent4-specific instructions without a separate gateway.
-    Falls back to the module-level SYSTEM_PROMPT if none provided.
+    Two-phase strategy for grounded calls (Agent1):
+      Phase 1: google_search tools enabled, plain-text response  → collects web facts
+      Phase 2: NO tools, response_mime_type=JSON + schema         → structured extraction
+
+    Single-phase strategy for non-grounded calls (Agent4 synthesis).
     """
 
     def __init__(self, config: GeminiConfig) -> None:
@@ -106,34 +148,216 @@ class GeminiGateway(AIGateway):
         image_bytes: Optional[bytes] = None,
         system_prompt: Optional[str] = None,
         use_grounding: bool = True,
-        use_thinking: bool = True,
+        use_thinking: bool = False,
+        json_schema: Optional[dict] = None,
     ) -> dict | str:
+        """
+        Entry point for all Gemini calls.
+          use_grounding=True  → two-phase (search → extract)
+          use_grounding=False → single-phase JSON (Agent4 synthesis)
+        """
+        if use_grounding:
+            return await self._two_phase_analyze(
+                prompt=prompt,
+                image_bytes=image_bytes,
+                system_prompt=system_prompt,
+                use_thinking=use_thinking,
+                json_schema=json_schema,
+            )
+        else:
+            return await self._single_phase_json(
+                prompt=prompt,
+                image_bytes=image_bytes,
+                system_prompt=system_prompt or SYSTEM_PROMPT,
+                use_thinking=use_thinking,
+                json_schema=json_schema,
+            )
+
+    # ── Two-phase: grounding → extraction ───────────────────────────────────
+
+    async def _two_phase_analyze(
+        self,
+        prompt: str,
+        image_bytes: Optional[bytes],
+        system_prompt: Optional[str],
+        use_thinking: bool,
+        json_schema: Optional[dict],
+    ) -> dict:
+        # Phase 1: web search + vision (free-form text)
+        grounded_text = await self._grounding_call(
+            prompt=prompt,
+            image_bytes=image_bytes,
+            system_prompt=system_prompt or _AGENT1_SEARCH_SYSTEM,
+            use_thinking=use_thinking,
+        )
+        log.info(
+            "[Phase1] grounded_text=%d chars | preview=%r",
+            len(grounded_text), grounded_text[:120],
+        )
+
+        # Phase 2: structured JSON extraction (no tools, schema-bound)
+        extract_prompt = (
+            "=== TEKS IKLAN ASLI ===\n"
+            f"{prompt}\n\n"
+            "=== HASIL INVESTIGASI INTERNET ===\n"
+            f"{grounded_text[:3000]}\n\n"
+            "Ekstrak semua fakta keras dari iklan dan hasil investigasi di atas. "
+            "Kembalikan JSON sesuai schema. WAJIB isi setiap field yang datanya tersedia."
+        )
+        result = await self._extraction_call(
+            prompt=extract_prompt,
+            system_prompt=_AGENT1_EXTRACT_SYSTEM,
+            json_schema=json_schema or _AGENT1_JSON_SCHEMA,
+        )
+        log.info(
+            "[Phase2] keys=%s | price=%s | address=%r | phone=%s",
+            list(result.keys()) if isinstance(result, dict) else type(result).__name__,
+            result.get("extracted_price_numeric") if isinstance(result, dict) else "?",
+            result.get("extracted_address_raw")   if isinstance(result, dict) else "?",
+            result.get("extracted_phones")         if isinstance(result, dict) else "?",
+        )
+        return result if isinstance(result, dict) else {}
+
+    async def _grounding_call(
+        self,
+        prompt: str,
+        image_bytes: Optional[bytes],
+        system_prompt: str,
+        use_thinking: bool,
+    ) -> str:
+        """Phase 1: google_search enabled, returns free-form text (NO JSON constraint)."""
         parts: list = []
         if image_bytes:
-            mime = (
-                "image/png"
-                if image_bytes.startswith(b"\x89PNG\r\n\x1a\n")
-                else "image/jpeg"
-            )
+            mime = "image/png" if image_bytes[:4] == b"\x89PNG" else "image/jpeg"
             parts.append(types.Part.from_bytes(data=image_bytes, mime_type=mime))
         parts.append(types.Part.from_text(text=prompt))
 
-        effective_system = system_prompt or SYSTEM_PROMPT
-        tools = [types.Tool(google_search=types.GoogleSearch())] if use_grounding else []
-        thinking = types.ThinkingConfig(thinking_level="high") if use_thinking else None
-
         cfg_kwargs: dict = {
-            "system_instruction": effective_system,
-            "response_mime_type": "application/json",
+            "system_instruction": system_prompt,
+            "tools": [types.Tool(google_search=types.GoogleSearch())],
+            # NOTE: intentionally NO response_mime_type here — grounding + JSON = conflict
         }
-        if tools:
-            cfg_kwargs["tools"] = tools
-        if thinking:
-            cfg_kwargs["thinking_config"] = thinking
+        if use_thinking:
+            cfg_kwargs["thinking_config"] = types.ThinkingConfig(thinking_level="high")
 
         gen_config = types.GenerateContentConfig(**cfg_kwargs)
-
         last_exc: Exception | None = None
+
+        for attempt in range(3):
+            try:
+                resp = await asyncio.to_thread(
+                    lambda: self._client.models.generate_content(
+                        model=self._model,
+                        contents=[types.Content(role="user", parts=parts)],
+                        config=gen_config,
+                    )
+                )
+                raw = getattr(resp, "text", "") or ""
+                if raw:
+                    return raw
+                log.warning("[Phase1] attempt %d returned empty text", attempt + 1)
+            except Exception as exc:
+                last_exc = exc
+                wait = 2 ** attempt
+                log.warning(
+                    "[Phase1] attempt %d/3 FAILED | %s | retry_in=%ds",
+                    attempt + 1, repr(exc)[:200], wait,
+                )
+                await asyncio.sleep(wait)
+
+        log.error("[Phase1] EXHAUSTED 3 attempts | last=%s", repr(last_exc)[:200])
+        return ""  # Phase 2 still runs with empty grounding context
+
+    async def _extraction_call(
+        self,
+        prompt: str,
+        system_prompt: str,
+        json_schema: dict,
+    ) -> dict:
+        """Phase 2: strict JSON extraction — NO tools, schema-bound response."""
+        parts = [types.Part.from_text(text=prompt)]
+
+        gen_config = types.GenerateContentConfig(
+            system_instruction=system_prompt,
+            response_mime_type="application/json",
+            response_json_schema=json_schema,
+            # NOTE: intentionally NO tools here — JSON mode + tools = conflict
+        )
+        last_exc: Exception | None = None
+
+        for attempt in range(3):
+            try:
+                resp = await asyncio.to_thread(
+                    lambda: self._client.models.generate_content(
+                        model=self._model,
+                        contents=[types.Content(role="user", parts=parts)],
+                        config=gen_config,
+                    )
+                )
+                raw_text = getattr(resp, "text", "") or ""
+                log.debug("[Phase2] raw=%r", raw_text[:300])
+                try:
+                    parsed = json.loads(raw_text)
+                    if isinstance(parsed, dict):
+                        return parsed
+                    log.warning("[Phase2] JSON not a dict: %s", type(parsed))
+                except json.JSONDecodeError:
+                    # Try rescue from markdown code block
+                    m = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', raw_text, re.DOTALL)
+                    if m:
+                        try:
+                            return json.loads(m.group(1))
+                        except json.JSONDecodeError:
+                            pass
+                    # Last resort: grab first {...} block
+                    m2 = re.search(r'\{.*\}', raw_text, re.DOTALL)
+                    if m2:
+                        try:
+                            return json.loads(m2.group())
+                        except json.JSONDecodeError:
+                            pass
+                    log.warning("[Phase2] non-JSON: %r", raw_text[:200])
+            except Exception as exc:
+                last_exc = exc
+                wait = 2 ** attempt
+                log.warning(
+                    "[Phase2] attempt %d/3 FAILED | %s | retry_in=%ds",
+                    attempt + 1, repr(exc)[:200], wait,
+                )
+                await asyncio.sleep(wait)
+
+        log.error("[Phase2] EXHAUSTED 3 attempts | last=%s", repr(last_exc)[:200])
+        return {}
+
+    # ── Single-phase: JSON only, no grounding (Agent4 synthesis) ────────────
+
+    async def _single_phase_json(
+        self,
+        prompt: str,
+        image_bytes: Optional[bytes],
+        system_prompt: str,
+        use_thinking: bool,
+        json_schema: Optional[dict],
+    ) -> dict | str:
+        """Single call: no tools, JSON mode. Used for Agent4 synthesis / scoring."""
+        parts: list = []
+        if image_bytes:
+            mime = "image/png" if image_bytes[:4] == b"\x89PNG" else "image/jpeg"
+            parts.append(types.Part.from_bytes(data=image_bytes, mime_type=mime))
+        parts.append(types.Part.from_text(text=prompt))
+
+        cfg_kwargs: dict = {
+            "system_instruction": system_prompt,
+            "response_mime_type": "application/json",
+        }
+        if json_schema:
+            cfg_kwargs["response_json_schema"] = json_schema
+        if use_thinking:
+            cfg_kwargs["thinking_config"] = types.ThinkingConfig(thinking_level="high")
+
+        gen_config = types.GenerateContentConfig(**cfg_kwargs)
+        last_exc: Exception | None = None
+
         for attempt in range(3):
             try:
                 resp = await asyncio.to_thread(
@@ -147,24 +371,16 @@ class GeminiGateway(AIGateway):
                 try:
                     return json.loads(raw_text)
                 except json.JSONDecodeError:
-                    log.warning("Gemini returned non-JSON, wrapping as raw")
-                    return {"raw": raw_text}
+                    log.warning("[single] non-JSON response, returning raw text")
+                    return raw_text  # Agent4 formatter can handle plain text too
             except Exception as exc:
                 last_exc = exc
                 wait = 2 ** attempt
                 log.warning(
-                    "Gemini attempt %d/%d FAILED | type=%s | detail=%s | retry_in=%ds",
-                    attempt + 1, 3,
-                    type(exc).__name__,
-                    repr(exc),
-                    wait,
+                    "[single] attempt %d/3 FAILED | %s | retry_in=%ds",
+                    attempt + 1, repr(exc)[:200], wait,
                 )
                 await asyncio.sleep(wait)
 
-        log.error(
-            "Gemini EXHAUSTED 3 attempts | model=%s | last_error=%s | detail=%s",
-            self._model,
-            type(last_exc).__name__,
-            repr(last_exc),
-        )
+        log.error("[single] EXHAUSTED | last=%s", repr(last_exc)[:200])
         return {"error": str(last_exc)[:400]}
