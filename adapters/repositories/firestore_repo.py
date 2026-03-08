@@ -65,28 +65,77 @@ class FirestoreListingRepo(ListingRepository):
         try:
             db = _get_db(self._cfg)
             maps = result.maps
+
+            # Flatten risk_flags from deepseek_raw or gemini_data
+            risk_flags: list[str] = []
+            if result.gemini_data:
+                risk_flags = result.gemini_data.get("risk_flags", []) or []
+            if not risk_flags and result.deepseek_raw:
+                for line in result.deepseek_raw.splitlines():
+                    stripped = line.lstrip("-• ").strip()
+                    if stripped and not stripped.startswith("Catatan"):
+                        risk_flags.append(stripped)
+
             doc = {
-                "listing_id":   result.listing_id,
-                "source":       result.source,
-                "source_link":  result.source_link,
-                "text_snippet": result.text[:500],
-                "location":     result.location_hint,
-                "price_value":  result.price_value,
-                "phones":       result.phones,
-                "score":        result.score,
-                "fraud_risk":   result.fraud_risk,
-                "distance_km":  result.distance_km_val,
-                "geocode":      maps.geocode,
+                # ── Core identity ────────────────────────────────────────────
+                "listing_id":       result.listing_id,
+                "source":           result.source,
+                "source_link":      result.source_link,
+                "text_snippet":     result.text[:500] if result.text else "",
+
+                # ── Location ─────────────────────────────────────────────────
+                "location":         result.location_hint or "",
+                "geocode":          maps.geocode if maps else None,
+
+                # ── Price ─────────────────────────────────────────────────────
+                "price_value":      result.price_value,
+                "price_text":       result.prices[0] if result.prices else None,
+                "price_score":      result.price_score,
+                "budget_status":    result.budget_status or "",
+
+                # ── Contact ───────────────────────────────────────────────────
+                "phones":           result.phones or [],
+
+                # ── Scoring & Risk ────────────────────────────────────────────
+                "score":            result.score,
+                "fraud_risk":       result.fraud_risk or "UNKNOWN",
+                "risk_flags":       risk_flags,
+
+                # ── Distance ──────────────────────────────────────────────────
+                "distance_km":      result.distance_km_val,
+                "jarak_status":     result.jarak_status or "",
+
+                # ── Air quality ───────────────────────────────────────────────
                 "air_quality":  (
                     {"aqi": maps.air_quality.aqi, "category": maps.air_quality.category}
-                    if maps.air_quality else None
+                    if maps and maps.air_quality else None
                 ),
-                "recommendation": result.recommendation,
-                "timestamp":    result.timestamp,
-                "created_at":   firestore.SERVER_TIMESTAMP,
+
+                # ── Recommendation ────────────────────────────────────────────
+                "recommendation":   result.recommendation or "",
+
+                # ── Agent data for dashboard detail view ──────────────────────
+                "agent_data": {
+                    "vision": {k: v for k, v in (result.gemini_data or {}).items()
+                               if k in ("size_m2", "condition", "condition_score",
+                                        "bathroom", "furniture", "has_ac",
+                                        "mezzanine", "photo_authentic", "photo_flags")},
+                    "web_intel_summary": (result.gemini_data or {}).get("web_intel_summary", "")[:500],
+                    "extracted_price_raw": (result.gemini_data or {}).get("extracted_price_raw", ""),
+                    "extracted_address":   (result.gemini_data or {}).get("extracted_address_raw", ""),
+                    "analyst_notes":       result.deepseek_raw[:300] if result.deepseek_raw else "",
+                },
+
+                # ── Timestamps ────────────────────────────────────────────────
+                "timestamp":        result.timestamp,
+                "created_at":       firestore.SERVER_TIMESTAMP,
             }
             await db.collection("kos_listings").document(result.listing_id).set(doc)
-            log.info("Saved listing %s", result.listing_id)
+            log.info(
+                "Saved listing %s | price=%s | score=%s | fraud=%s | km=%s",
+                result.listing_id, result.price_value, result.score,
+                result.fraud_risk, result.distance_km_val,
+            )
         except Exception as exc:
             _mark_unavailable(exc)
 
