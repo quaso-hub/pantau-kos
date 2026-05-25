@@ -1,0 +1,161 @@
+"""
+bot/handlers.py
+Telegram message handlers: pesan biasa + callback query dari inline buttons.
+"""
+import asyncio
+import logging
+
+import httpx
+from telegram import Bot, Update, CallbackQuery
+from telegram.constants import ParseMode
+
+from engine.analyzer import full_analysis
+from bot.formatter import format_report, split_message
+from bot.keyboards import report_keyboard
+from memory.learning import process_feedback
+from memory.firestore import get_listing
+
+log = logging.getLogger("god-eye.handlers")
+
+
+# ── Main message handler ──────────────────────────────────────────────────────
+
+async def handle_update(data: dict, bot: Bot, allowed_chat_id: int) -> None:
+    """Entry point untuk semua update dari Telegram."""
+    update = Update.de_json(data, bot)
+
+    # Callback query (tombol inline)
+    if update.callback_query:
+        await handle_callback(update.callback_query, bot, allowed_chat_id)
+        return
+
+    msg = update.message
+    if not msg:
+        return
+
+    # Auth check
+    if msg.chat_id != allowed_chat_id:
+        await msg.reply_text("⛔ Bot ini private.")
+        return
+
+    text        = msg.text or msg.caption or ""
+    image_bytes: bytes | None = None
+
+    # Download foto jika ada
+    if msg.photo:
+        try:
+            file = await bot.get_file(msg.photo[-1].file_id)
+            async with httpx.AsyncClient(timeout=15) as c:
+                r = await c.get(file.file_path)
+                image_bytes = r.content
+        except Exception as exc:
+            log.warning(f"Failed to download photo: {exc}")
+
+    elif msg.document and msg.document.mime_type and msg.document.mime_type.startswith("image/"):
+        try:
+            file = await bot.get_file(msg.document.file_id)
+            async with httpx.AsyncClient(timeout=15) as c:
+                r = await c.get(file.file_path)
+                image_bytes = r.content
+        except Exception as exc:
+            log.warning(f"Failed to download document: {exc}")
+
+    if not text and not image_bytes:
+        await msg.reply_text(
+            "Kirim teks, link, foto kamar, atau screenshot postingan FB/Instagram/Mamikos."
+        )
+        return
+
+    # Extract source link
+    import re
+    links       = re.findall(r'https?://[^\s]+', text)
+    source_link = links[0] if links else ""
+
+    # Notif "sedang proses"
+    await bot.send_message(
+        allowed_chat_id,
+        "⏳ *Menganalisis..* tunggu 20-30 detik",
+        parse_mode=ParseMode.MARKDOWN,
+    )
+
+    try:
+        result = await full_analysis(
+            text=text,
+            image_bytes=image_bytes,
+            source_link=source_link,
+            source="manual",
+            chat_id=allowed_chat_id,
+        )
+
+        report  = format_report(result)
+        parts   = split_message(report)
+        phone   = result.phones[0] if result.phones else None
+        keyboard = report_keyboard(result.listing_id, phone)
+
+        for i, part in enumerate(parts):
+            # Keyboard hanya di pesan terakhir
+            markup = keyboard if i == len(parts) - 1 else None
+            await bot.send_message(
+                allowed_chat_id,
+                part,
+                parse_mode=ParseMode.MARKDOWN,
+                disable_web_page_preview=False,
+                reply_markup=markup,
+            )
+    except Exception as exc:
+        log.error(f"Analysis failed: {exc}", exc_info=True)
+        await bot.send_message(
+            allowed_chat_id,
+            f"❌ Error saat analisis: {str(exc)[:300]}",
+        )
+
+
+# ── Callback query handler ────────────────────────────────────────────────────
+
+async def handle_callback(
+    query: CallbackQuery, bot: Bot, allowed_chat_id: int
+) -> None:
+    """Proses tap pada inline button: survey / skip / save."""
+    await query.answer()  # Hapus loading spinner
+
+    if query.message.chat_id != allowed_chat_id:
+        return
+
+    data = query.data or ""
+    if ":" not in data:
+        return
+
+    action, listing_id = data.split(":", 1)
+    log.info(f"Callback: action={action}, listing_id={listing_id}")
+
+    # Ambil listing dari Firestore untuk mendapat location + price
+    listing_doc  = await get_listing(listing_id)
+    location     = listing_doc.get("location", "") if listing_doc else ""
+    price_value  = listing_doc.get("price_value") if listing_doc else None
+
+    # Update self-learning
+    try:
+        await process_feedback(
+            chat_id=allowed_chat_id,
+            listing_id=listing_id,
+            action=action,
+            location=location,
+            price_value=float(price_value) if price_value else None,
+            listing=listing_doc,
+        )
+    except Exception as exc:
+        log.warning(f"process_feedback error (non-fatal): {exc}")
+
+    # Feedback message ke user
+    feedback_text = {
+        "survey":    f"✅ Oke! Listing `{listing_id}` ditandai mau survey. Preferensi diperbarui.",
+        "skip":      f"❌ Listing `{listing_id}` di-skip. Area akan dihindari di analisis berikutnya.",
+        "save":      f"🔖 Listing `{listing_id}` disimpan.",
+        "blacklist": f"🚫 Nomor telepon dari listing `{listing_id}` dilaporkan dan diblacklist.",
+    }.get(action, f"Feedback `{action}` dicatat.")
+
+    await bot.send_message(
+        allowed_chat_id,
+        feedback_text,
+        parse_mode=ParseMode.MARKDOWN,
+    )

@@ -1,0 +1,302 @@
+{
+  "name": "\ud83c\udfe0 Tier1 \u2014 Mamikos Hunter (Every 2h)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 2
+            }
+          ]
+        }
+      },
+      "id": "mamikos-trigger",
+      "name": "\u23f0 Schedule Mamikos",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// \u2500\u2500 Random User-Agent \u2500\u2500\nconst UAS = [\n  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',\n  'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15',\n  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',\n  'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0',\n  'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1'\n];\nconst ua = UAS[Math.floor(Math.random() * UAS.length)];\nreturn [{ json: { userAgent: ua } }];"
+      },
+      "id": "mamikos-ua",
+      "name": "\ud83c\udfb2 Random UA (Mamikos)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        460,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://mamikos.com/api/search/room",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "city_slug",
+              "value": "surabaya--jawa-timur--indonesia"
+            },
+            {
+              "name": "price_min",
+              "value": "300000"
+            },
+            {
+              "name": "price_max",
+              "value": "800000"
+            },
+            {
+              "name": "type",
+              "value": "monthly"
+            },
+            {
+              "name": "sort",
+              "value": "latest"
+            },
+            {
+              "name": "per_page",
+              "value": "50"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "={{ $('\ud83c\udfb2 Random UA (Mamikos)').item.json.userAgent }}"
+            },
+            {
+              "name": "Accept",
+              "value": "application/json, text/plain, */*"
+            },
+            {
+              "name": "Accept-Language",
+              "value": "id-ID,id;q=0.9,en-US;q=0.8"
+            },
+            {
+              "name": "Referer",
+              "value": "https://mamikos.com/"
+            },
+            {
+              "name": "X-Requested-With",
+              "value": "XMLHttpRequest"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000,
+          "redirect": {
+            "redirect": {
+              "followRedirects": true,
+              "maxRedirects": 3
+            }
+          }
+        }
+      },
+      "id": "mamikos-fetch",
+      "name": "\ud83c\udf10 Fetch Mamikos API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        680,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// \u2500\u2500 Mamikos: Parse + Filter + Deduplicate \u2500\u2500\nconst staticData = $getWorkflowStaticData('global');\nif (!staticData.sentIds) staticData.sentIds = {};\n\n// TTL cleanup \u2014 hapus entry > 24 jam\nconst now = Date.now();\nfor (const id in staticData.sentIds) {\n  if (now - staticData.sentIds[id] > 86400000) delete staticData.sentIds[id];\n}\n\nconst raw = $input.first().json;\n// Mamikos bisa return 'data', 'rooms', 'results', atau langsung array\nconst rooms = raw.data?.rooms || raw.data?.results || raw.rooms || raw.results || raw.data || [];\nif (!Array.isArray(rooms)) {\n  console.log('Mamikos: unexpected response shape', JSON.stringify(raw).slice(0, 200));\n  return [];\n}\n\nconst output = [];\n\nfor (const room of rooms) {\n  // \u2500\u2500 Price filter Rp 300k\u2013800k \u2500\u2500\n  const price = parseInt(room.price_per_month || room.price?.amount || room.price || 0);\n  if (!price || price < 300000 || price > 800000) continue;\n\n  // \u2500\u2500 Location / Surabaya keyword filter \u2500\u2500\n  const locText = [\n    room.address, room.location, room.area_name,\n    room.city, room.district, room.name, room.title\n  ].filter(Boolean).join(' ').toLowerCase();\n  const isSurabaya = locText.includes('surabaya') || locText.includes('sby') ||\n                     locText.includes('jawa timur') || locText.includes('jatim');\n  if (!isSurabaya) continue;\n\n  // \u2500\u2500 Image filter \u2014 minimal 1 foto \u2500\u2500\n  const rawPhotos = room.photos || room.images || room.pictures || [];\n  const images = rawPhotos\n    .map(p => (typeof p === 'string' ? p : p?.url || p?.photo_url || p?.src || ''))\n    .filter(u => u && u.startsWith('http'))\n    .slice(0, 5);\n  if (images.length === 0) continue;\n\n  // \u2500\u2500 Deduplication via static data \u2500\u2500\n  const uid = 'mamikos_' + (room.id || room.slug || room.uuid ||\n    Buffer.from(room.name + price).toString('base64').slice(0, 12));\n  if (staticData.sentIds[uid]) continue;\n  staticData.sentIds[uid] = now;\n\n  // \u2500\u2500 Build payload \u2500\u2500\n  const slug = room.slug || room.id || uid.replace('mamikos_', '');\n  output.push({\n    json: {\n      source: 'mamikos',\n      title: room.name || room.title || 'Kos Surabaya',\n      price,\n      location: [\n        room.address, room.district, room.area_name, room.city\n      ].filter(Boolean).join(', ') || 'Surabaya',\n      url: room.url || `https://mamikos.com/kamar/${slug}`,\n      description: (room.description || room.facilities_text || '').slice(0, 500),\n      images,\n      scraped_at: new Date().toISOString()\n    }\n  });\n}\n\nconsole.log(`Mamikos: ${output.length} listings passed filters`);\nreturn output;"
+      },
+      "id": "mamikos-parse",
+      "name": "\u2699\ufe0f Parse + Filter + Dedup (Mamikos)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        900,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "has-items",
+              "leftValue": "={{ $input.all().length }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "mamikos-if",
+      "name": "\ud83d\udd0e Has Results? (Mamikos)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "mamikos-split",
+      "name": "\ud83d\udce6 Split Batches (Mamikos)",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        1340,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://god-eye-134668262767.asia-southeast1.run.app/monitor",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Secret",
+              "value": "={{ $env.N8N_SECRET }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "mamikos-send",
+      "name": "\ud83d\udce1 Send to God Eye (Mamikos)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1560,
+        220
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "mamikos-noop",
+      "name": "\ud83d\udeab No Results (Mamikos)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1340,
+        400
+      ]
+    }
+  ],
+  "connections": {
+    "\u23f0 Schedule Mamikos": {
+      "main": [
+        [
+          {
+            "node": "\ud83c\udfb2 Random UA (Mamikos)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "\ud83c\udfb2 Random UA (Mamikos)": {
+      "main": [
+        [
+          {
+            "node": "\ud83c\udf10 Fetch Mamikos API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "\ud83c\udf10 Fetch Mamikos API": {
+      "main": [
+        [
+          {
+            "node": "\u2699\ufe0f Parse + Filter + Dedup (Mamikos)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "\u2699\ufe0f Parse + Filter + Dedup (Mamikos)": {
+      "main": [
+        [
+          {
+            "node": "\ud83d\udd0e Has Results? (Mamikos)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "\ud83d\udd0e Has Results? (Mamikos)": {
+      "main": [
+        [
+          {
+            "node": "\ud83d\udce6 Split Batches (Mamikos)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "\ud83d\udeab No Results (Mamikos)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "\ud83d\udce6 Split Batches (Mamikos)": {
+      "main": [
+        [
+          {
+            "node": "\ud83d\udce1 Send to God Eye (Mamikos)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false,
+  "versionId": "1"
+}

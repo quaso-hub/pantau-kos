@@ -1,0 +1,443 @@
+ult
+Filter
+Severity
+Time
+Summary
+No older entries found matching the current filter.
+2026-03-07 21:43:08.571 ICT
+
+
+POST
+
+500
+
+411 B
+
+1.007 s
+https://god-eye-134668262767.asia-southeast1.run.app/webhook
+2026-03-07 21:43:08.584 ICT
+2026-03-07 14:43:08,584 [INFO] god-eye: Telegram update received: update_id=77330039
+2026-03-07 21:43:09.588 ICT
+2026-03-07 14:43:09,587 [ERROR] main: Exception on /webhook [POST]
+2026-03-07 21:43:09.588 ICT
+
+Traceback (most recent call last):   File "/usr/local/lib/python3.11/site-packages/httpx/_transports/default.py", line 72, in map_httpcore_exceptions     yield   File "/usr/local/lib/python3.11/site-packages/httpx/_transports/default.py", line 377, in handle_async_request     resp = await self._pool.handle_async_request(req)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpcore/_async/connection_pool.py", line 256, in handle_async_request     raise exc from None   File "/usr/local/lib/python3.11/site-packages/httpcore/_async/connection_pool.py", line 232, in handle_async_request     connection = await pool_request.wait_for_connection(timeout=timeout)                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpcore/_async/connection_pool.py", line 35, in wait_for_connection     await self._connection_acquired.wait(timeout=timeout)   File "/usr/local/lib/python3.11/site-packages/httpcore/_synchronization.py", line 149, in wait     with map_exceptions(anyio_exc_map):   File "/usr/local/lib/python3.11/contextlib.py", line 158, in __exit__     self.gen.throw(typ, value, traceback)   File "/usr/local/lib/python3.11/site-packages/httpcore/_exceptions.py", line 14, in map_exceptions     raise to_exc(exc) from exc
+2026-03-07 21:43:09.588 ICT
+httpcore.PoolTimeout
+2026-03-07 21:43:09.588 ICT
+The above exception was the direct cause of the following exception:
+2026-03-07 21:43:09.588 ICT
+
+Traceback (most recent call last):   File "/usr/local/lib/python3.11/site-packages/telegram/request/_httpxrequest.py", line 292, in do_request     res = await self._client.request(           ^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpx/_client.py", line 1585, in request     return await self.send(request, auth=auth, follow_redirects=follow_redirects)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpx/_client.py", line 1674, in send     response = await self._send_handling_auth(                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpx/_client.py", line 1702, in _send_handling_auth     response = await self._send_handling_redirects(                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpx/_client.py", line 1739, in _send_handling_redirects     response = await self._send_single_request(request)                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpx/_client.py", line 1776, in _send_single_request     response = await transport.handle_async_request(request)                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpx/_transports/default.py", line 376, in handle_async_request     with map_httpcore_exceptions():   File "/usr/local/lib/python3.11/contextlib.py", line 158, in __exit__     self.gen.throw(typ, value, traceback)   File "/usr/local/lib/python3.11/site-packages/httpx/_transports/default.py", line 89, in map_httpcore_exceptions     raise mapped_exc(message) from exc
+2026-03-07 21:43:09.588 ICT
+httpx.PoolTimeout
+2026-03-07 21:43:09.588 ICT
+The above exception was the direct cause of the following exception:
+2026-03-07 21:43:09.588 ICT
+
+Traceback (most recent call last):   File "/usr/local/lib/python3.11/site-packages/flask/app.py", line 1473, in wsgi_app     response = self.full_dispatch_request()                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/flask/app.py", line 882, in full_dispatch_request     rv = self.handle_user_exception(e)          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/flask/app.py", line 880, in full_dispatch_request     rv = self.dispatch_request()          ^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/flask/app.py", line 865, in dispatch_request     return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/app/main.py", line 115, in telegram_webhook     asyncio.run(handle_update(data, bot, ALLOWED_CHAT_ID))   File "/usr/local/lib/python3.11/asyncio/runners.py", line 190, in run     return runner.run(main)            ^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/asyncio/runners.py", line 118, in run     return self._loop.run_until_complete(task)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/asyncio/base_events.py", line 654, in run_until_complete     return future.result()            ^^^^^^^^^^^^^^^   File "/app/bot/handlers.py", line 270, in handle_update     await dispatch[cmd](update, ctx)   File "/app/bot/handlers.py", line 358, in cmd_help     await context.bot.send_message(   File "/usr/local/lib/python3.11/site-packages/telegram/_bot.py", line 1029, in send_message     return await self._send_message(            ^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/telegram/_bot.py", line 745, in _send_message     result = await self._post(              ^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/telegram/_bot.py", line 623, in _post     return await self._do_post(            ^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/telegram/_bot.py", line 652, in _do_post     result = await request.post(              ^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/telegram/request/_baserequest.py", line 201, in post     result = await self._request_wrapper(              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/telegram/request/_baserequest.py", line 333, in _request_wrapper     code, p… [message truncated due to size]
+2026-03-07 21:43:09.588 ICT
+2026-03-07 14:43:09,589 [INFO] werkzeug: 169.254.169.126 - - [07/Mar/2026 14:43:09] "[35m[1mPOST /webhook HTTP/1.1[0m" 500 -
+2026-03-07 21:44:31.895 ICT
+
+
+POST
+
+500
+
+411 B
+
+1.009 s
+https://god-eye-134668262767.asia-southeast1.run.app/webhook
+2026-03-07 21:44:31.908 ICT
+2026-03-07 14:44:31,910 [INFO] god-eye: Telegram update received: update_id=77330039
+2026-03-07 21:44:32.914 ICT
+2026-03-07 14:44:32,913 [ERROR] main: Exception on /webhook [POST]
+2026-03-07 21:44:32.914 ICT
+
+Traceback (most recent call last):   File "/usr/local/lib/python3.11/site-packages/httpx/_transports/default.py", line 72, in map_httpcore_exceptions     yield   File "/usr/local/lib/python3.11/site-packages/httpx/_transports/default.py", line 377, in handle_async_request     resp = await self._pool.handle_async_request(req)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpcore/_async/connection_pool.py", line 256, in handle_async_request     raise exc from None   File "/usr/local/lib/python3.11/site-packages/httpcore/_async/connection_pool.py", line 232, in handle_async_request     connection = await pool_request.wait_for_connection(timeout=timeout)                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpcore/_async/connection_pool.py", line 35, in wait_for_connection     await self._connection_acquired.wait(timeout=timeout)   File "/usr/local/lib/python3.11/site-packages/httpcore/_synchronization.py", line 149, in wait     with map_exceptions(anyio_exc_map):   File "/usr/local/lib/python3.11/contextlib.py", line 158, in __exit__     self.gen.throw(typ, value, traceback)   File "/usr/local/lib/python3.11/site-packages/httpcore/_exceptions.py", line 14, in map_exceptions     raise to_exc(exc) from exc
+2026-03-07 21:44:32.914 ICT
+httpcore.PoolTimeout
+2026-03-07 21:44:32.914 ICT
+The above exception was the direct cause of the following exception:
+2026-03-07 21:44:32.914 ICT
+
+Traceback (most recent call last):   File "/usr/local/lib/python3.11/site-packages/telegram/request/_httpxrequest.py", line 292, in do_request     res = await self._client.request(           ^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpx/_client.py", line 1585, in request     return await self.send(request, auth=auth, follow_redirects=follow_redirects)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpx/_client.py", line 1674, in send     response = await self._send_handling_auth(                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpx/_client.py", line 1702, in _send_handling_auth     response = await self._send_handling_redirects(                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpx/_client.py", line 1739, in _send_handling_redirects     response = await self._send_single_request(request)                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpx/_client.py", line 1776, in _send_single_request     response = await transport.handle_async_request(request)                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpx/_transports/default.py", line 376, in handle_async_request     with map_httpcore_exceptions():   File "/usr/local/lib/python3.11/contextlib.py", line 158, in __exit__     self.gen.throw(typ, value, traceback)   File "/usr/local/lib/python3.11/site-packages/httpx/_transports/default.py", line 89, in map_httpcore_exceptions     raise mapped_exc(message) from exc
+2026-03-07 21:44:32.914 ICT
+httpx.PoolTimeout
+2026-03-07 21:44:32.914 ICT
+The above exception was the direct cause of the following exception:
+2026-03-07 21:44:32.914 ICT
+
+Traceback (most recent call last):   File "/usr/local/lib/python3.11/site-packages/flask/app.py", line 1473, in wsgi_app     response = self.full_dispatch_request()                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/flask/app.py", line 882, in full_dispatch_request     rv = self.handle_user_exception(e)          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/flask/app.py", line 880, in full_dispatch_request     rv = self.dispatch_request()          ^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/flask/app.py", line 865, in dispatch_request     return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/app/main.py", line 115, in telegram_webhook     asyncio.run(handle_update(data, bot, ALLOWED_CHAT_ID))   File "/usr/local/lib/python3.11/asyncio/runners.py", line 190, in run     return runner.run(main)            ^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/asyncio/runners.py", line 118, in run     return self._loop.run_until_complete(task)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/asyncio/base_events.py", line 654, in run_until_complete     return future.result()            ^^^^^^^^^^^^^^^   File "/app/bot/handlers.py", line 270, in handle_update     await dispatch[cmd](update, ctx)   File "/app/bot/handlers.py", line 358, in cmd_help     await context.bot.send_message(   File "/usr/local/lib/python3.11/site-packages/telegram/_bot.py", line 1029, in send_message     return await self._send_message(            ^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/telegram/_bot.py", line 745, in _send_message     result = await self._post(              ^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/telegram/_bot.py", line 623, in _post     return await self._do_post(            ^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/telegram/_bot.py", line 652, in _do_post     result = await request.post(              ^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/telegram/request/_baserequest.py", line 201, in post     result = await self._request_wrapper(              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/telegram/request/_baserequest.py", line 333, in _request_wrapper     code, p… [message truncated due to size]
+2026-03-07 21:44:32.915 ICT
+2026-03-07 14:44:32,915 [INFO] werkzeug: 169.254.169.126 - - [07/Mar/2026 14:44:32] "[35m[1mPOST /webhook HTTP/1.1[0m" 500 -
+2026-03-07 21:46:31.219 ICT
+
+
+POST
+
+500
+
+411 B
+
+1.01 s
+https://god-eye-134668262767.asia-southeast1.run.app/webhook
+2026-03-07 21:46:31.230 ICT
+2026-03-07 14:46:31,231 [INFO] god-eye: Telegram update received: update_id=77330039
+2026-03-07 21:46:32.236 ICT
+2026-03-07 14:46:32,235 [ERROR] main: Exception on /webhook [POST]
+2026-03-07 21:46:32.236 ICT
+
+Traceback (most recent call last):   File "/usr/local/lib/python3.11/site-packages/httpx/_transports/default.py", line 72, in map_httpcore_exceptions     yield   File "/usr/local/lib/python3.11/site-packages/httpx/_transports/default.py", line 377, in handle_async_request     resp = await self._pool.handle_async_request(req)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpcore/_async/connection_pool.py", line 256, in handle_async_request     raise exc from None   File "/usr/local/lib/python3.11/site-packages/httpcore/_async/connection_pool.py", line 232, in handle_async_request     connection = await pool_request.wait_for_connection(timeout=timeout)                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpcore/_async/connection_pool.py", line 35, in wait_for_connection     await self._connection_acquired.wait(timeout=timeout)   File "/usr/local/lib/python3.11/site-packages/httpcore/_synchronization.py", line 149, in wait     with map_exceptions(anyio_exc_map):   File "/usr/local/lib/python3.11/contextlib.py", line 158, in __exit__     self.gen.throw(typ, value, traceback)   File "/usr/local/lib/python3.11/site-packages/httpcore/_exceptions.py", line 14, in map_exceptions     raise to_exc(exc) from exc
+2026-03-07 21:46:32.236 ICT
+httpcore.PoolTimeout
+2026-03-07 21:46:32.236 ICT
+The above exception was the direct cause of the following exception:
+2026-03-07 21:46:32.236 ICT
+
+Traceback (most recent call last):   File "/usr/local/lib/python3.11/site-packages/telegram/request/_httpxrequest.py", line 292, in do_request     res = await self._client.request(           ^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpx/_client.py", line 1585, in request     return await self.send(request, auth=auth, follow_redirects=follow_redirects)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpx/_client.py", line 1674, in send     response = await self._send_handling_auth(                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpx/_client.py", line 1702, in _send_handling_auth     response = await self._send_handling_redirects(                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpx/_client.py", line 1739, in _send_handling_redirects     response = await self._send_single_request(request)                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpx/_client.py", line 1776, in _send_single_request     response = await transport.handle_async_request(request)                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpx/_transports/default.py", line 376, in handle_async_request     with map_httpcore_exceptions():   File "/usr/local/lib/python3.11/contextlib.py", line 158, in __exit__     self.gen.throw(typ, value, traceback)   File "/usr/local/lib/python3.11/site-packages/httpx/_transports/default.py", line 89, in map_httpcore_exceptions     raise mapped_exc(message) from exc
+2026-03-07 21:46:32.236 ICT
+httpx.PoolTimeout
+2026-03-07 21:46:32.236 ICT
+The above exception was the direct cause of the following exception:
+2026-03-07 21:46:32.236 ICT
+
+Traceback (most recent call last):   File "/usr/local/lib/python3.11/site-packages/flask/app.py", line 1473, in wsgi_app     response = self.full_dispatch_request()                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/flask/app.py", line 882, in full_dispatch_request     rv = self.handle_user_exception(e)          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/flask/app.py", line 880, in full_dispatch_request     rv = self.dispatch_request()          ^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/flask/app.py", line 865, in dispatch_request     return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/app/main.py", line 115, in telegram_webhook     asyncio.run(handle_update(data, bot, ALLOWED_CHAT_ID))   File "/usr/local/lib/python3.11/asyncio/runners.py", line 190, in run     return runner.run(main)            ^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/asyncio/runners.py", line 118, in run     return self._loop.run_until_complete(task)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/asyncio/base_events.py", line 654, in run_until_complete     return future.result()            ^^^^^^^^^^^^^^^   File "/app/bot/handlers.py", line 270, in handle_update     await dispatch[cmd](update, ctx)   File "/app/bot/handlers.py", line 358, in cmd_help     await context.bot.send_message(   File "/usr/local/lib/python3.11/site-packages/telegram/_bot.py", line 1029, in send_message     return await self._send_message(            ^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/telegram/_bot.py", line 745, in _send_message     result = await self._post(              ^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/telegram/_bot.py", line 623, in _post     return await self._do_post(            ^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/telegram/_bot.py", line 652, in _do_post     result = await request.post(              ^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/telegram/request/_baserequest.py", line 201, in post     result = await self._request_wrapper(              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/telegram/request/_baserequest.py", line 333, in _request_wrapper     code, p… [message truncated due to size]
+2026-03-07 21:46:32.236 ICT
+2026-03-07 14:46:32,237 [INFO] werkzeug: 169.254.169.126 - - [07/Mar/2026 14:46:32] "[35m[1mPOST /webhook HTTP/1.1[0m" 500 -
+2026-03-07 21:47:01.638 ICT
+
+GET
+
+200
+
+163 B
+
+3 ms
+
+Chrome 143.0.0.0
+https://god-eye.ikrn.engineer/
+2026-03-07 21:47:01.642 ICT
+2026-03-07 14:47:01,643 [INFO] werkzeug: 169.254.169.126 - - [07/Mar/2026 14:47:01] "GET / HTTP/1.1" 200 -
+2026-03-07 21:47:01.646 ICT
+
+
+GET
+
+404
+
+353 B
+
+2 ms
+
+Chrome 143.0.0.0
+https://god-eye.ikrn.engineer/.env
+2026-03-07 21:47:01.650 ICT
+2026-03-07 14:47:01,650 [INFO] werkzeug: 169.254.169.126 - - [07/Mar/2026 14:47:01] "[33mGET /.env HTTP/1.1[0m" 404 -
+2026-03-07 21:47:02.714 ICT
+
+
+GET
+
+404
+
+353 B
+
+3 ms
+
+Chrome 143.0.0.0
+https://god-eye.ikrn.engineer/.env.production
+2026-03-07 21:47:02.718 ICT
+2026-03-07 14:47:02,720 [INFO] werkzeug: 169.254.169.126 - - [07/Mar/2026 14:47:02] "[33mGET /.env.production HTTP/1.1[0m" 404 -
+2026-03-07 21:47:03.069 ICT
+
+
+GET
+
+404
+
+353 B
+
+7 ms
+
+Chrome 143.0.0.0
+https://god-eye.ikrn.engineer/.env.prod
+2026-03-07 21:47:03.077 ICT
+2026-03-07 14:47:03,079 [INFO] werkzeug: 169.254.169.126 - - [07/Mar/2026 14:47:03] "[33mGET /.env.prod HTTP/1.1[0m" 404 -
+2026-03-07 21:47:04.873 ICT
+
+
+GET
+
+404
+
+353 B
+
+2 ms
+
+Chrome 143.0.0.0
+https://god-eye.ikrn.engineer/.env.local
+2026-03-07 21:47:04.877 ICT
+2026-03-07 14:47:04,878 [INFO] werkzeug: 169.254.169.126 - - [07/Mar/2026 14:47:04] "[33mGET /.env.local HTTP/1.1[0m" 404 -
+2026-03-07 21:47:57.542 ICT
+
+
+POST
+
+500
+
+411 B
+
+1.008 s
+https://god-eye-134668262767.asia-southeast1.run.app/webhook
+2026-03-07 21:47:57.550 ICT
+2026-03-07 14:47:57,551 [INFO] god-eye: Telegram update received: update_id=77330039
+2026-03-07 21:47:58.555 ICT
+2026-03-07 14:47:58,554 [ERROR] main: Exception on /webhook [POST]
+2026-03-07 21:47:58.555 ICT
+
+Traceback (most recent call last):   File "/usr/local/lib/python3.11/site-packages/httpx/_transports/default.py", line 72, in map_httpcore_exceptions     yield   File "/usr/local/lib/python3.11/site-packages/httpx/_transports/default.py", line 377, in handle_async_request     resp = await self._pool.handle_async_request(req)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpcore/_async/connection_pool.py", line 256, in handle_async_request     raise exc from None   File "/usr/local/lib/python3.11/site-packages/httpcore/_async/connection_pool.py", line 232, in handle_async_request     connection = await pool_request.wait_for_connection(timeout=timeout)                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpcore/_async/connection_pool.py", line 35, in wait_for_connection     await self._connection_acquired.wait(timeout=timeout)   File "/usr/local/lib/python3.11/site-packages/httpcore/_synchronization.py", line 149, in wait     with map_exceptions(anyio_exc_map):   File "/usr/local/lib/python3.11/contextlib.py", line 158, in __exit__     self.gen.throw(typ, value, traceback)   File "/usr/local/lib/python3.11/site-packages/httpcore/_exceptions.py", line 14, in map_exceptions     raise to_exc(exc) from exc
+2026-03-07 21:47:58.555 ICT
+httpcore.PoolTimeout
+2026-03-07 21:47:58.555 ICT
+The above exception was the direct cause of the following exception:
+2026-03-07 21:47:58.555 ICT
+
+Traceback (most recent call last):   File "/usr/local/lib/python3.11/site-packages/telegram/request/_httpxrequest.py", line 292, in do_request     res = await self._client.request(           ^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpx/_client.py", line 1585, in request     return await self.send(request, auth=auth, follow_redirects=follow_redirects)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpx/_client.py", line 1674, in send     response = await self._send_handling_auth(                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpx/_client.py", line 1702, in _send_handling_auth     response = await self._send_handling_redirects(                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpx/_client.py", line 1739, in _send_handling_redirects     response = await self._send_single_request(request)                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpx/_client.py", line 1776, in _send_single_request     response = await transport.handle_async_request(request)                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpx/_transports/default.py", line 376, in handle_async_request     with map_httpcore_exceptions():   File "/usr/local/lib/python3.11/contextlib.py", line 158, in __exit__     self.gen.throw(typ, value, traceback)   File "/usr/local/lib/python3.11/site-packages/httpx/_transports/default.py", line 89, in map_httpcore_exceptions     raise mapped_exc(message) from exc
+2026-03-07 21:47:58.555 ICT
+httpx.PoolTimeout
+2026-03-07 21:47:58.555 ICT
+The above exception was the direct cause of the following exception:
+2026-03-07 21:47:58.555 ICT
+
+Traceback (most recent call last):   File "/usr/local/lib/python3.11/site-packages/flask/app.py", line 1473, in wsgi_app     response = self.full_dispatch_request()                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/flask/app.py", line 882, in full_dispatch_request     rv = self.handle_user_exception(e)          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/flask/app.py", line 880, in full_dispatch_request     rv = self.dispatch_request()          ^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/flask/app.py", line 865, in dispatch_request     return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/app/main.py", line 115, in telegram_webhook     asyncio.run(handle_update(data, bot, ALLOWED_CHAT_ID))   File "/usr/local/lib/python3.11/asyncio/runners.py", line 190, in run     return runner.run(main)            ^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/asyncio/runners.py", line 118, in run     return self._loop.run_until_complete(task)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/asyncio/base_events.py", line 654, in run_until_complete     return future.result()            ^^^^^^^^^^^^^^^   File "/app/bot/handlers.py", line 270, in handle_update     await dispatch[cmd](update, ctx)   File "/app/bot/handlers.py", line 358, in cmd_help     await context.bot.send_message(   File "/usr/local/lib/python3.11/site-packages/telegram/_bot.py", line 1029, in send_message     return await self._send_message(            ^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/telegram/_bot.py", line 745, in _send_message     result = await self._post(              ^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/telegram/_bot.py", line 623, in _post     return await self._do_post(            ^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/telegram/_bot.py", line 652, in _do_post     result = await request.post(              ^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/telegram/request/_baserequest.py", line 201, in post     result = await self._request_wrapper(              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/telegram/request/_baserequest.py", line 333, in _request_wrapper     code, p… [message truncated due to size]
+2026-03-07 21:47:58.555 ICT
+2026-03-07 14:47:58,556 [INFO] werkzeug: 169.254.169.126 - - [07/Mar/2026 14:47:58] "[35m[1mPOST /webhook HTTP/1.1[0m" 500 -
+2026-03-07 21:49:17.861 ICT
+
+
+POST
+
+500
+
+411 B
+
+1.008 s
+https://god-eye-134668262767.asia-southeast1.run.app/webhook
+2026-03-07 21:49:17.873 ICT
+2026-03-07 14:49:17,874 [INFO] god-eye: Telegram update received: update_id=77330039
+2026-03-07 21:49:18.878 ICT
+2026-03-07 14:49:18,877 [ERROR] main: Exception on /webhook [POST]
+2026-03-07 21:49:18.878 ICT
+
+Traceback (most recent call last):   File "/usr/local/lib/python3.11/site-packages/httpx/_transports/default.py", line 72, in map_httpcore_exceptions     yield   File "/usr/local/lib/python3.11/site-packages/httpx/_transports/default.py", line 377, in handle_async_request     resp = await self._pool.handle_async_request(req)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpcore/_async/connection_pool.py", line 256, in handle_async_request     raise exc from None   File "/usr/local/lib/python3.11/site-packages/httpcore/_async/connection_pool.py", line 232, in handle_async_request     connection = await pool_request.wait_for_connection(timeout=timeout)                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpcore/_async/connection_pool.py", line 35, in wait_for_connection     await self._connection_acquired.wait(timeout=timeout)   File "/usr/local/lib/python3.11/site-packages/httpcore/_synchronization.py", line 149, in wait     with map_exceptions(anyio_exc_map):   File "/usr/local/lib/python3.11/contextlib.py", line 158, in __exit__     self.gen.throw(typ, value, traceback)   File "/usr/local/lib/python3.11/site-packages/httpcore/_exceptions.py", line 14, in map_exceptions     raise to_exc(exc) from exc
+2026-03-07 21:49:18.878 ICT
+httpcore.PoolTimeout
+2026-03-07 21:49:18.878 ICT
+The above exception was the direct cause of the following exception:
+2026-03-07 21:49:18.878 ICT
+
+Traceback (most recent call last):   File "/usr/local/lib/python3.11/site-packages/telegram/request/_httpxrequest.py", line 292, in do_request     res = await self._client.request(           ^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpx/_client.py", line 1585, in request     return await self.send(request, auth=auth, follow_redirects=follow_redirects)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpx/_client.py", line 1674, in send     response = await self._send_handling_auth(                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpx/_client.py", line 1702, in _send_handling_auth     response = await self._send_handling_redirects(                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpx/_client.py", line 1739, in _send_handling_redirects     response = await self._send_single_request(request)                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpx/_client.py", line 1776, in _send_single_request     response = await transport.handle_async_request(request)                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpx/_transports/default.py", line 376, in handle_async_request     with map_httpcore_exceptions():   File "/usr/local/lib/python3.11/contextlib.py", line 158, in __exit__     self.gen.throw(typ, value, traceback)   File "/usr/local/lib/python3.11/site-packages/httpx/_transports/default.py", line 89, in map_httpcore_exceptions     raise mapped_exc(message) from exc
+2026-03-07 21:49:18.878 ICT
+httpx.PoolTimeout
+2026-03-07 21:49:18.878 ICT
+The above exception was the direct cause of the following exception:
+2026-03-07 21:49:18.878 ICT
+
+Traceback (most recent call last):   File "/usr/local/lib/python3.11/site-packages/flask/app.py", line 1473, in wsgi_app     response = self.full_dispatch_request()                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/flask/app.py", line 882, in full_dispatch_request     rv = self.handle_user_exception(e)          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/flask/app.py", line 880, in full_dispatch_request     rv = self.dispatch_request()          ^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/flask/app.py", line 865, in dispatch_request     return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/app/main.py", line 115, in telegram_webhook     asyncio.run(handle_update(data, bot, ALLOWED_CHAT_ID))   File "/usr/local/lib/python3.11/asyncio/runners.py", line 190, in run     return runner.run(main)            ^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/asyncio/runners.py", line 118, in run     return self._loop.run_until_complete(task)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/asyncio/base_events.py", line 654, in run_until_complete     return future.result()            ^^^^^^^^^^^^^^^   File "/app/bot/handlers.py", line 270, in handle_update     await dispatch[cmd](update, ctx)   File "/app/bot/handlers.py", line 358, in cmd_help     await context.bot.send_message(   File "/usr/local/lib/python3.11/site-packages/telegram/_bot.py", line 1029, in send_message     return await self._send_message(            ^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/telegram/_bot.py", line 745, in _send_message     result = await self._post(              ^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/telegram/_bot.py", line 623, in _post     return await self._do_post(            ^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/telegram/_bot.py", line 652, in _do_post     result = await request.post(              ^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/telegram/request/_baserequest.py", line 201, in post     result = await self._request_wrapper(              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/telegram/request/_baserequest.py", line 333, in _request_wrapper     code, p… [message truncated due to size]
+2026-03-07 21:49:18.878 ICT
+2026-03-07 14:49:18,879 [INFO] werkzeug: 169.254.169.126 - - [07/Mar/2026 14:49:18] "[35m[1mPOST /webhook HTTP/1.1[0m" 500 -
+2026-03-07 21:49:35.410 ICT
+
+GET
+
+200
+
+163 B
+
+2 ms
+
+Chrome 145.0.0.0
+https://god-eye.ikrn.engineer/
+2026-03-07 21:49:35.414 ICT
+2026-03-07 14:49:35,414 [INFO] werkzeug: 169.254.169.126 - - [07/Mar/2026 14:49:35] "GET / HTTP/1.1" 200 -
+2026-03-07 21:49:35.518 ICT
+
+
+GET
+
+404
+
+353 B
+
+2 ms
+
+Chrome 145.0.0.0
+https://god-eye.ikrn.engineer/favicon.ico
+2026-03-07 21:49:35.522 ICT
+2026-03-07 14:49:35,522 [INFO] werkzeug: 169.254.169.126 - - [07/Mar/2026 14:49:35] "[33mGET /favicon.ico HTTP/1.1[0m" 404 -
+2026-03-07 21:49:48.288 ICT
+
+GET
+
+200
+
+163 B
+
+3 ms
+
+Chrome 145.0.0.0
+https://god-eye.ikrn.engineer/
+2026-03-07 21:49:48.293 ICT
+2026-03-07 14:49:48,294 [INFO] werkzeug: 169.254.169.126 - - [07/Mar/2026 14:49:48] "GET / HTTP/1.1" 200 -
+2026-03-07 21:50:18.034 ICT
+
+GET
+
+200
+
+163 B
+
+2 ms
+
+Chrome 145.0.0.0
+https://god-eye.ikrn.engineer/
+2026-03-07 21:50:18.039 ICT
+2026-03-07 14:50:18,039 [INFO] werkzeug: 169.254.169.126 - - [07/Mar/2026 14:50:18] "GET / HTTP/1.1" 200 -
+2026-03-07 21:50:29.185 ICT
+
+
+POST
+
+500
+
+411 B
+
+1.008 s
+https://god-eye-134668262767.asia-southeast1.run.app/webhook
+2026-03-07 21:50:29.189 ICT
+2026-03-07 14:50:29,190 [INFO] god-eye: Telegram update received: update_id=77330039
+2026-03-07 21:50:30.195 ICT
+2026-03-07 14:50:30,194 [ERROR] main: Exception on /webhook [POST]
+2026-03-07 21:50:30.195 ICT
+
+Traceback (most recent call last):   File "/usr/local/lib/python3.11/site-packages/httpx/_transports/default.py", line 72, in map_httpcore_exceptions     yield   File "/usr/local/lib/python3.11/site-packages/httpx/_transports/default.py", line 377, in handle_async_request     resp = await self._pool.handle_async_request(req)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpcore/_async/connection_pool.py", line 256, in handle_async_request     raise exc from None   File "/usr/local/lib/python3.11/site-packages/httpcore/_async/connection_pool.py", line 232, in handle_async_request     connection = await pool_request.wait_for_connection(timeout=timeout)                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpcore/_async/connection_pool.py", line 35, in wait_for_connection     await self._connection_acquired.wait(timeout=timeout)   File "/usr/local/lib/python3.11/site-packages/httpcore/_synchronization.py", line 149, in wait     with map_exceptions(anyio_exc_map):   File "/usr/local/lib/python3.11/contextlib.py", line 158, in __exit__     self.gen.throw(typ, value, traceback)   File "/usr/local/lib/python3.11/site-packages/httpcore/_exceptions.py", line 14, in map_exceptions     raise to_exc(exc) from exc
+2026-03-07 21:50:30.195 ICT
+httpcore.PoolTimeout
+2026-03-07 21:50:30.195 ICT
+The above exception was the direct cause of the following exception:
+2026-03-07 21:50:30.195 ICT
+
+Traceback (most recent call last):   File "/usr/local/lib/python3.11/site-packages/telegram/request/_httpxrequest.py", line 292, in do_request     res = await self._client.request(           ^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpx/_client.py", line 1585, in request     return await self.send(request, auth=auth, follow_redirects=follow_redirects)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpx/_client.py", line 1674, in send     response = await self._send_handling_auth(                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpx/_client.py", line 1702, in _send_handling_auth     response = await self._send_handling_redirects(                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpx/_client.py", line 1739, in _send_handling_redirects     response = await self._send_single_request(request)                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpx/_client.py", line 1776, in _send_single_request     response = await transport.handle_async_request(request)                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpx/_transports/default.py", line 376, in handle_async_request     with map_httpcore_exceptions():   File "/usr/local/lib/python3.11/contextlib.py", line 158, in __exit__     self.gen.throw(typ, value, traceback)   File "/usr/local/lib/python3.11/site-packages/httpx/_transports/default.py", line 89, in map_httpcore_exceptions     raise mapped_exc(message) from exc
+2026-03-07 21:50:30.195 ICT
+httpx.PoolTimeout
+2026-03-07 21:50:30.195 ICT
+The above exception was the direct cause of the following exception:
+2026-03-07 21:50:30.195 ICT
+
+Traceback (most recent call last):   File "/usr/local/lib/python3.11/site-packages/flask/app.py", line 1473, in wsgi_app     response = self.full_dispatch_request()                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/flask/app.py", line 882, in full_dispatch_request     rv = self.handle_user_exception(e)          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/flask/app.py", line 880, in full_dispatch_request     rv = self.dispatch_request()          ^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/flask/app.py", line 865, in dispatch_request     return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/app/main.py", line 115, in telegram_webhook     asyncio.run(handle_update(data, bot, ALLOWED_CHAT_ID))   File "/usr/local/lib/python3.11/asyncio/runners.py", line 190, in run     return runner.run(main)            ^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/asyncio/runners.py", line 118, in run     return self._loop.run_until_complete(task)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/asyncio/base_events.py", line 654, in run_until_complete     return future.result()            ^^^^^^^^^^^^^^^   File "/app/bot/handlers.py", line 270, in handle_update     await dispatch[cmd](update, ctx)   File "/app/bot/handlers.py", line 358, in cmd_help     await context.bot.send_message(   File "/usr/local/lib/python3.11/site-packages/telegram/_bot.py", line 1029, in send_message     return await self._send_message(            ^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/telegram/_bot.py", line 745, in _send_message     result = await self._post(              ^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/telegram/_bot.py", line 623, in _post     return await self._do_post(            ^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/telegram/_bot.py", line 652, in _do_post     result = await request.post(              ^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/telegram/request/_baserequest.py", line 201, in post     result = await self._request_wrapper(              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/telegram/request/_baserequest.py", line 333, in _request_wrapper     code, p… [message truncated due to size]
+2026-03-07 21:50:30.195 ICT
+2026-03-07 14:50:30,196 [INFO] werkzeug: 169.254.169.126 - - [07/Mar/2026 14:50:30] "[35m[1mPOST /webhook HTTP/1.1[0m" 500 -
+2026-03-07 21:51:36.502 ICT
+
+
+POST
+
+500
+
+411 B
+
+1.008 s
+https://god-eye-134668262767.asia-southeast1.run.app/webhook
+2026-03-07 21:51:36.515 ICT
+2026-03-07 14:51:36,516 [INFO] god-eye: Telegram update received: update_id=77330039
+2026-03-07 21:51:37.520 ICT
+2026-03-07 14:51:37,519 [ERROR] main: Exception on /webhook [POST]
+2026-03-07 21:51:37.520 ICT
+
+Traceback (most recent call last):   File "/usr/local/lib/python3.11/site-packages/httpx/_transports/default.py", line 72, in map_httpcore_exceptions     yield   File "/usr/local/lib/python3.11/site-packages/httpx/_transports/default.py", line 377, in handle_async_request     resp = await self._pool.handle_async_request(req)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpcore/_async/connection_pool.py", line 256, in handle_async_request     raise exc from None   File "/usr/local/lib/python3.11/site-packages/httpcore/_async/connection_pool.py", line 232, in handle_async_request     connection = await pool_request.wait_for_connection(timeout=timeout)                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpcore/_async/connection_pool.py", line 35, in wait_for_connection     await self._connection_acquired.wait(timeout=timeout)   File "/usr/local/lib/python3.11/site-packages/httpcore/_synchronization.py", line 149, in wait     with map_exceptions(anyio_exc_map):   File "/usr/local/lib/python3.11/contextlib.py", line 158, in __exit__     self.gen.throw(typ, value, traceback)   File "/usr/local/lib/python3.11/site-packages/httpcore/_exceptions.py", line 14, in map_exceptions     raise to_exc(exc) from exc
+2026-03-07 21:51:37.520 ICT
+httpcore.PoolTimeout
+2026-03-07 21:51:37.520 ICT
+The above exception was the direct cause of the following exception:
+2026-03-07 21:51:37.520 ICT
+
+Traceback (most recent call last):   File "/usr/local/lib/python3.11/site-packages/telegram/request/_httpxrequest.py", line 292, in do_request     res = await self._client.request(           ^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpx/_client.py", line 1585, in request     return await self.send(request, auth=auth, follow_redirects=follow_redirects)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpx/_client.py", line 1674, in send     response = await self._send_handling_auth(                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpx/_client.py", line 1702, in _send_handling_auth     response = await self._send_handling_redirects(                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpx/_client.py", line 1739, in _send_handling_redirects     response = await self._send_single_request(request)                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpx/_client.py", line 1776, in _send_single_request     response = await transport.handle_async_request(request)                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpx/_transports/default.py", line 376, in handle_async_request     with map_httpcore_exceptions():   File "/usr/local/lib/python3.11/contextlib.py", line 158, in __exit__     self.gen.throw(typ, value, traceback)   File "/usr/local/lib/python3.11/site-packages/httpx/_transports/default.py", line 89, in map_httpcore_exceptions     raise mapped_exc(message) from exc
+2026-03-07 21:51:37.520 ICT
+httpx.PoolTimeout
+2026-03-07 21:51:37.520 ICT
+The above exception was the direct cause of the following exception:
+2026-03-07 21:51:37.520 ICT
+
+Traceback (most recent call last):   File "/usr/local/lib/python3.11/site-packages/flask/app.py", line 1473, in wsgi_app     response = self.full_dispatch_request()                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/flask/app.py", line 882, in full_dispatch_request     rv = self.handle_user_exception(e)          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/flask/app.py", line 880, in full_dispatch_request     rv = self.dispatch_request()          ^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/flask/app.py", line 865, in dispatch_request     return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/app/main.py", line 115, in telegram_webhook     asyncio.run(handle_update(data, bot, ALLOWED_CHAT_ID))   File "/usr/local/lib/python3.11/asyncio/runners.py", line 190, in run     return runner.run(main)            ^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/asyncio/runners.py", line 118, in run     return self._loop.run_until_complete(task)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/asyncio/base_events.py", line 654, in run_until_complete     return future.result()            ^^^^^^^^^^^^^^^   File "/app/bot/handlers.py", line 270, in handle_update     await dispatch[cmd](update, ctx)   File "/app/bot/handlers.py", line 358, in cmd_help     await context.bot.send_message(   File "/usr/local/lib/python3.11/site-packages/telegram/_bot.py", line 1029, in send_message     return await self._send_message(            ^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/telegram/_bot.py", line 745, in _send_message     result = await self._post(              ^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/telegram/_bot.py", line 623, in _post     return await self._do_post(            ^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/telegram/_bot.py", line 652, in _do_post     result = await request.post(              ^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/telegram/request/_baserequest.py", line 201, in post     result = await self._request_wrapper(              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/telegram/request/_baserequest.py", line 333, in _request_wrapper     code, p… [message truncated due to size]
+2026-03-07 21:51:37.520 ICT
+2026-03-07 14:51:37,521 [INFO] werkzeug: 169.254.169.126 - - [07/Mar/2026 14:51:37] "[35m[1mPOST /webhook HTTP/1.1[0m" 500 -
+2026-03-07 21:53:15.826 ICT
+
+
+POST
+
+500
+
+411 B
+
+1.008 s
+https://god-eye-134668262767.asia-southeast1.run.app/webhook
+2026-03-07 21:53:15.835 ICT
+2026-03-07 14:53:15,836 [INFO] god-eye: Telegram update received: update_id=77330039
+2026-03-07 21:53:16.840 ICT
+2026-03-07 14:53:16,839 [ERROR] main: Exception on /webhook [POST]
+2026-03-07 21:53:16.840 ICT
+
+Traceback (most recent call last):   File "/usr/local/lib/python3.11/site-packages/httpx/_transports/default.py", line 72, in map_httpcore_exceptions     yield   File "/usr/local/lib/python3.11/site-packages/httpx/_transports/default.py", line 377, in handle_async_request     resp = await self._pool.handle_async_request(req)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpcore/_async/connection_pool.py", line 256, in handle_async_request     raise exc from None   File "/usr/local/lib/python3.11/site-packages/httpcore/_async/connection_pool.py", line 232, in handle_async_request     connection = await pool_request.wait_for_connection(timeout=timeout)                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpcore/_async/connection_pool.py", line 35, in wait_for_connection     await self._connection_acquired.wait(timeout=timeout)   File "/usr/local/lib/python3.11/site-packages/httpcore/_synchronization.py", line 149, in wait     with map_exceptions(anyio_exc_map):   File "/usr/local/lib/python3.11/contextlib.py", line 158, in __exit__     self.gen.throw(typ, value, traceback)   File "/usr/local/lib/python3.11/site-packages/httpcore/_exceptions.py", line 14, in map_exceptions     raise to_exc(exc) from exc
+2026-03-07 21:53:16.840 ICT
+httpcore.PoolTimeout
+2026-03-07 21:53:16.840 ICT
+The above exception was the direct cause of the following exception:
+2026-03-07 21:53:16.840 ICT
+
+Traceback (most recent call last):   File "/usr/local/lib/python3.11/site-packages/telegram/request/_httpxrequest.py", line 292, in do_request     res = await self._client.request(           ^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpx/_client.py", line 1585, in request     return await self.send(request, auth=auth, follow_redirects=follow_redirects)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpx/_client.py", line 1674, in send     response = await self._send_handling_auth(                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpx/_client.py", line 1702, in _send_handling_auth     response = await self._send_handling_redirects(                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpx/_client.py", line 1739, in _send_handling_redirects     response = await self._send_single_request(request)                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpx/_client.py", line 1776, in _send_single_request     response = await transport.handle_async_request(request)                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpx/_transports/default.py", line 376, in handle_async_request     with map_httpcore_exceptions():   File "/usr/local/lib/python3.11/contextlib.py", line 158, in __exit__     self.gen.throw(typ, value, traceback)   File "/usr/local/lib/python3.11/site-packages/httpx/_transports/default.py", line 89, in map_httpcore_exceptions     raise mapped_exc(message) from exc
+2026-03-07 21:53:16.840 ICT
+httpx.PoolTimeout
+2026-03-07 21:53:16.840 ICT
+The above exception was the direct cause of the following exception:
+2026-03-07 21:53:16.840 ICT
+
+Traceback (most recent call last):   File "/usr/local/lib/python3.11/site-packages/flask/app.py", line 1473, in wsgi_app     response = self.full_dispatch_request()                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/flask/app.py", line 882, in full_dispatch_request     rv = self.handle_user_exception(e)          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/flask/app.py", line 880, in full_dispatch_request     rv = self.dispatch_request()          ^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/flask/app.py", line 865, in dispatch_request     return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/app/main.py", line 115, in telegram_webhook     asyncio.run(handle_update(data, bot, ALLOWED_CHAT_ID))   File "/usr/local/lib/python3.11/asyncio/runners.py", line 190, in run     return runner.run(main)            ^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/asyncio/runners.py", line 118, in run     return self._loop.run_until_complete(task)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/asyncio/base_events.py", line 654, in run_until_complete     return future.result()            ^^^^^^^^^^^^^^^   File "/app/bot/handlers.py", line 270, in handle_update     await dispatch[cmd](update, ctx)   File "/app/bot/handlers.py", line 358, in cmd_help     await context.bot.send_message(   File "/usr/local/lib/python3.11/site-packages/telegram/_bot.py", line 1029, in send_message     return await self._send_message(            ^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/telegram/_bot.py", line 745, in _send_message     result = await self._post(              ^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/telegram/_bot.py", line 623, in _post     return await self._do_post(            ^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/telegram/_bot.py", line 652, in _do_post     result = await request.post(              ^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/telegram/request/_baserequest.py", line 201, in post     result = await self._request_wrapper(              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/telegram/request/_baserequest.py", line 333, in _request_wrapper     code, p… [message truncated due to size]
+2026-03-07 21:53:16.841 ICT
+2026-03-07 14:53:16,841 [INFO] werkzeug: 169.254.169.126 - - [07/Mar/2026 14:53:16] "[35m[1mPOST /webhook HTTP/1.1[0m" 500 -
+2026-03-07 21:55:07.146 ICT
+
+
+POST
+
+500
+
+411 B
+
+1.008 s
+https://god-eye-134668262767.asia-southeast1.run.app/webhook
+2026-03-07 21:55:07.158 ICT
+2026-03-07 14:55:07,159 [INFO] god-eye: Telegram update received: update_id=77330039
+2026-03-07 21:55:08.163 ICT
+2026-03-07 14:55:08,162 [ERROR] main: Exception on /webhook [POST]
+2026-03-07 21:55:08.163 ICT
+
+Traceback (most recent call last):   File "/usr/local/lib/python3.11/site-packages/httpx/_transports/default.py", line 72, in map_httpcore_exceptions     yield   File "/usr/local/lib/python3.11/site-packages/httpx/_transports/default.py", line 377, in handle_async_request     resp = await self._pool.handle_async_request(req)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpcore/_async/connection_pool.py", line 256, in handle_async_request     raise exc from None   File "/usr/local/lib/python3.11/site-packages/httpcore/_async/connection_pool.py", line 232, in handle_async_request     connection = await pool_request.wait_for_connection(timeout=timeout)                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpcore/_async/connection_pool.py", line 35, in wait_for_connection     await self._connection_acquired.wait(timeout=timeout)   File "/usr/local/lib/python3.11/site-packages/httpcore/_synchronization.py", line 149, in wait     with map_exceptions(anyio_exc_map):   File "/usr/local/lib/python3.11/contextlib.py", line 158, in __exit__     self.gen.throw(typ, value, traceback)   File "/usr/local/lib/python3.11/site-packages/httpcore/_exceptions.py", line 14, in map_exceptions     raise to_exc(exc) from exc
+2026-03-07 21:55:08.163 ICT
+httpcore.PoolTimeout
+2026-03-07 21:55:08.163 ICT
+The above exception was the direct cause of the following exception:
+2026-03-07 21:55:08.163 ICT
+
+Traceback (most recent call last):   File "/usr/local/lib/python3.11/site-packages/telegram/request/_httpxrequest.py", line 292, in do_request     res = await self._client.request(           ^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpx/_client.py", line 1585, in request     return await self.send(request, auth=auth, follow_redirects=follow_redirects)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpx/_client.py", line 1674, in send     response = await self._send_handling_auth(                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpx/_client.py", line 1702, in _send_handling_auth     response = await self._send_handling_redirects(                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpx/_client.py", line 1739, in _send_handling_redirects     response = await self._send_single_request(request)                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpx/_client.py", line 1776, in _send_single_request     response = await transport.handle_async_request(request)                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/httpx/_transports/default.py", line 376, in handle_async_request     with map_httpcore_exceptions():   File "/usr/local/lib/python3.11/contextlib.py", line 158, in __exit__     self.gen.throw(typ, value, traceback)   File "/usr/local/lib/python3.11/site-packages/httpx/_transports/default.py", line 89, in map_httpcore_exceptions     raise mapped_exc(message) from exc
+2026-03-07 21:55:08.163 ICT
+httpx.PoolTimeout
+2026-03-07 21:55:08.163 ICT
+The above exception was the direct cause of the following exception:
+2026-03-07 21:55:08.163 ICT
+
+Traceback (most recent call last):   File "/usr/local/lib/python3.11/site-packages/flask/app.py", line 1473, in wsgi_app     response = self.full_dispatch_request()                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/flask/app.py", line 882, in full_dispatch_request     rv = self.handle_user_exception(e)          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/flask/app.py", line 880, in full_dispatch_request     rv = self.dispatch_request()          ^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/flask/app.py", line 865, in dispatch_request     return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/app/main.py", line 115, in telegram_webhook     asyncio.run(handle_update(data, bot, ALLOWED_CHAT_ID))   File "/usr/local/lib/python3.11/asyncio/runners.py", line 190, in run     return runner.run(main)            ^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/asyncio/runners.py", line 118, in run     return self._loop.run_until_complete(task)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/asyncio/base_events.py", line 654, in run_until_complete     return future.result()            ^^^^^^^^^^^^^^^   File "/app/bot/handlers.py", line 270, in handle_update     await dispatch[cmd](update, ctx)   File "/app/bot/handlers.py", line 358, in cmd_help     await context.bot.send_message(   File "/usr/local/lib/python3.11/site-packages/telegram/_bot.py", line 1029, in send_message     return await self._send_message(            ^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/telegram/_bot.py", line 745, in _send_message     result = await self._post(              ^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/telegram/_bot.py", line 623, in _post     return await self._do_post(            ^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/telegram/_bot.py", line 652, in _do_post     result = await request.post(              ^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/telegram/request/_baserequest.py", line 201, in post     result = await self._request_wrapper(              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^   File "/usr/local/lib/python3.11/site-packages/telegram/request/_baserequest.py", line 333, in _request_wrapper     code, p… [message truncated due to size]
+2026-03-07 21:55:08.163 ICT
+2026-03-07 14:55:08,164 [INFO] werkzeug: 169.254.169.126 - - [07/Mar/2026 14:55:08] "[35m[1mPOST /webhook HTTP/1.1[0m" 500 -

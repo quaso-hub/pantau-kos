@@ -1,0 +1,493 @@
+[
+  {
+    "name": "🏠 Tier1 — Mamikos Hunter (Every 2h)",
+    "nodes": [
+      {
+        "parameters": {
+          "rule": {
+            "interval": [{ "field": "hours", "hoursInterval": 2 }]
+          }
+        },
+        "id": "mamikos-trigger",
+        "name": "⏰ Schedule Mamikos",
+        "type": "n8n-nodes-base.scheduleTrigger",
+        "typeVersion": 1.1,
+        "position": [240, 300]
+      },
+      {
+        "parameters": {
+          "jsCode": "// ── Random User-Agent ──\nconst UAS = [\n  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',\n  'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15',\n  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',\n  'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0',\n  'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1'\n];\nconst ua = UAS[Math.floor(Math.random() * UAS.length)];\nreturn [{ json: { userAgent: ua } }];"
+        },
+        "id": "mamikos-ua",
+        "name": "🎲 Random UA (Mamikos)",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [460, 300]
+      },
+      {
+        "parameters": {
+          "url": "https://mamikos.com/api/search/room",
+          "sendQuery": true,
+          "queryParameters": {
+            "parameters": [
+              { "name": "city_slug", "value": "surabaya--jawa-timur--indonesia" },
+              { "name": "price_min", "value": "300000" },
+              { "name": "price_max", "value": "800000" },
+              { "name": "type", "value": "monthly" },
+              { "name": "sort", "value": "latest" },
+              { "name": "per_page", "value": "50" }
+            ]
+          },
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              { "name": "User-Agent", "value": "={{ $('🎲 Random UA (Mamikos)').item.json.userAgent }}" },
+              { "name": "Accept", "value": "application/json, text/plain, */*" },
+              { "name": "Accept-Language", "value": "id-ID,id;q=0.9,en-US;q=0.8" },
+              { "name": "Referer", "value": "https://mamikos.com/" },
+              { "name": "X-Requested-With", "value": "XMLHttpRequest" }
+            ]
+          },
+          "options": {
+            "timeout": 30000,
+            "redirect": { "redirect": { "followRedirects": true, "maxRedirects": 3 } }
+          }
+        },
+        "id": "mamikos-fetch",
+        "name": "🌐 Fetch Mamikos API",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [680, 300]
+      },
+      {
+        "parameters": {
+          "jsCode": "// ── Mamikos: Parse + Filter + Deduplicate ──\nconst staticData = $getWorkflowStaticData('global');\nif (!staticData.sentIds) staticData.sentIds = {};\n\n// TTL cleanup — hapus entry > 24 jam\nconst now = Date.now();\nfor (const id in staticData.sentIds) {\n  if (now - staticData.sentIds[id] > 86400000) delete staticData.sentIds[id];\n}\n\nconst raw = $input.first().json;\n// Mamikos bisa return 'data', 'rooms', 'results', atau langsung array\nconst rooms = raw.data?.rooms || raw.data?.results || raw.rooms || raw.results || raw.data || [];\nif (!Array.isArray(rooms)) {\n  console.log('Mamikos: unexpected response shape', JSON.stringify(raw).slice(0, 200));\n  return [];\n}\n\nconst output = [];\n\nfor (const room of rooms) {\n  // ── Price filter Rp 300k–800k ──\n  const price = parseInt(room.price_per_month || room.price?.amount || room.price || 0);\n  if (!price || price < 300000 || price > 800000) continue;\n\n  // ── Location / Surabaya keyword filter ──\n  const locText = [\n    room.address, room.location, room.area_name,\n    room.city, room.district, room.name, room.title\n  ].filter(Boolean).join(' ').toLowerCase();\n  const isSurabaya = locText.includes('surabaya') || locText.includes('sby') ||\n                     locText.includes('jawa timur') || locText.includes('jatim');\n  if (!isSurabaya) continue;\n\n  // ── Image filter — minimal 1 foto ──\n  const rawPhotos = room.photos || room.images || room.pictures || [];\n  const images = rawPhotos\n    .map(p => (typeof p === 'string' ? p : p?.url || p?.photo_url || p?.src || ''))\n    .filter(u => u && u.startsWith('http'))\n    .slice(0, 5);\n  if (images.length === 0) continue;\n\n  // ── Deduplication via static data ──\n  const uid = 'mamikos_' + (room.id || room.slug || room.uuid ||\n    Buffer.from(room.name + price).toString('base64').slice(0, 12));\n  if (staticData.sentIds[uid]) continue;\n  staticData.sentIds[uid] = now;\n\n  // ── Build payload ──\n  const slug = room.slug || room.id || uid.replace('mamikos_', '');\n  output.push({\n    json: {\n      source: 'mamikos',\n      title: room.name || room.title || 'Kos Surabaya',\n      price,\n      location: [\n        room.address, room.district, room.area_name, room.city\n      ].filter(Boolean).join(', ') || 'Surabaya',\n      url: room.url || `https://mamikos.com/kamar/${slug}`,\n      description: (room.description || room.facilities_text || '').slice(0, 500),\n      images,\n      scraped_at: new Date().toISOString()\n    }\n  });\n}\n\nconsole.log(`Mamikos: ${output.length} listings passed filters`);\nreturn output;"
+        },
+        "id": "mamikos-parse",
+        "name": "⚙️ Parse + Filter + Dedup (Mamikos)",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [900, 300]
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "strict" },
+            "conditions": [
+              {
+                "id": "has-items",
+                "leftValue": "={{ $input.all().length }}",
+                "rightValue": 0,
+                "operator": { "type": "number", "operation": "gt" }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        },
+        "id": "mamikos-if",
+        "name": "🔎 Has Results? (Mamikos)",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2,
+        "position": [1120, 300]
+      },
+      {
+        "parameters": {
+          "batchSize": 1,
+          "options": {}
+        },
+        "id": "mamikos-split",
+        "name": "📦 Split Batches (Mamikos)",
+        "type": "n8n-nodes-base.splitInBatches",
+        "typeVersion": 3,
+        "position": [1340, 220]
+      },
+      {
+        "parameters": {
+          "url": "https://god-eye-134668262767.asia-southeast1.run.app/monitor",
+          "method": "POST",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              { "name": "X-Secret", "value": "={{ $env.N8N_SECRET }}" },
+              { "name": "Content-Type", "value": "application/json" }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify($json) }}",
+          "options": {
+            "timeout": 15000,
+            "response": { "response": { "neverError": true } }
+          }
+        },
+        "id": "mamikos-send",
+        "name": "📡 Send to God Eye (Mamikos)",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [1560, 220]
+      },
+      {
+        "parameters": {},
+        "id": "mamikos-noop",
+        "name": "🚫 No Results (Mamikos)",
+        "type": "n8n-nodes-base.noOp",
+        "typeVersion": 1,
+        "position": [1340, 400]
+      }
+    ],
+    "connections": {
+      "⏰ Schedule Mamikos": {
+        "main": [[{ "node": "🎲 Random UA (Mamikos)", "type": "main", "index": 0 }]]
+      },
+      "🎲 Random UA (Mamikos)": {
+        "main": [[{ "node": "🌐 Fetch Mamikos API", "type": "main", "index": 0 }]]
+      },
+      "🌐 Fetch Mamikos API": {
+        "main": [[{ "node": "⚙️ Parse + Filter + Dedup (Mamikos)", "type": "main", "index": 0 }]]
+      },
+      "⚙️ Parse + Filter + Dedup (Mamikos)": {
+        "main": [[{ "node": "🔎 Has Results? (Mamikos)", "type": "main", "index": 0 }]]
+      },
+      "🔎 Has Results? (Mamikos)": {
+        "main": [
+          [{ "node": "📦 Split Batches (Mamikos)", "type": "main", "index": 0 }],
+          [{ "node": "🚫 No Results (Mamikos)", "type": "main", "index": 0 }]
+        ]
+      },
+      "📦 Split Batches (Mamikos)": {
+        "main": [[{ "node": "📡 Send to God Eye (Mamikos)", "type": "main", "index": 0 }]]
+      }
+    },
+    "settings": { "executionOrder": "v1" }
+  },
+
+  {
+    "name": "🏠 Tier1 — OLX Hunter (Every 3h)",
+    "nodes": [
+      {
+        "parameters": {
+          "rule": {
+            "interval": [{ "field": "hours", "hoursInterval": 3 }]
+          }
+        },
+        "id": "olx-trigger",
+        "name": "⏰ Schedule OLX",
+        "type": "n8n-nodes-base.scheduleTrigger",
+        "typeVersion": 1.1,
+        "position": [240, 300]
+      },
+      {
+        "parameters": {
+          "jsCode": "const UAS = [\n  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',\n  'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15',\n  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',\n  'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0',\n  'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36'\n];\nconst ua = UAS[Math.floor(Math.random() * UAS.length)];\nreturn [{ json: { userAgent: ua } }];"
+        },
+        "id": "olx-ua",
+        "name": "🎲 Random UA (OLX)",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [460, 300]
+      },
+      {
+        "parameters": {
+          "url": "https://www.olx.co.id/api/relevance/search",
+          "sendQuery": true,
+          "queryParameters": {
+            "parameters": [
+              { "name": "query", "value": "kos surabaya" },
+              { "name": "catId", "value": "1228" },
+              { "name": "priceMin", "value": "300000" },
+              { "name": "priceMax", "value": "800000" },
+              { "name": "sort", "value": "date" },
+              { "name": "page", "value": "1" }
+            ]
+          },
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              { "name": "User-Agent", "value": "={{ $('🎲 Random UA (OLX)').item.json.userAgent }}" },
+              { "name": "Accept", "value": "application/json, */*" },
+              { "name": "Accept-Language", "value": "id-ID,id;q=0.9" },
+              { "name": "Referer", "value": "https://www.olx.co.id/properti/disewa/kost_c1228/?search%5Bfilter_float_price%3Afrom%5D=300000&search%5Bfilter_float_price%3Ato%5D=800000" },
+              { "name": "x-origin", "value": "https://www.olx.co.id" }
+            ]
+          },
+          "options": {
+            "timeout": 30000,
+            "redirect": { "redirect": { "followRedirects": true, "maxRedirects": 3 } }
+          }
+        },
+        "id": "olx-fetch",
+        "name": "🌐 Fetch OLX API",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [680, 300]
+      },
+      {
+        "parameters": {
+          "jsCode": "// ── OLX: Parse + Filter + Deduplicate ──\nconst staticData = $getWorkflowStaticData('global');\nif (!staticData.sentIds) staticData.sentIds = {};\n\nconst now = Date.now();\nfor (const id in staticData.sentIds) {\n  if (now - staticData.sentIds[id] > 86400000) delete staticData.sentIds[id];\n}\n\nconst raw = $input.first().json;\n// OLX API: top-level ads array, atau nested\nconst ads = raw.data?.ads || raw.ads || raw.data || [];\nif (!Array.isArray(ads)) {\n  console.log('OLX: unexpected shape', JSON.stringify(raw).slice(0, 200));\n  return [];\n}\n\nconst output = [];\n\nfor (const ad of ads) {\n  // ── Price ──\n  const priceRaw = ad.price?.value?.raw || ad.price?.raw ||\n    ad.priceValue || ad.price_value || 0;\n  const price = parseInt(String(priceRaw).replace(/\\D/g, ''));\n  if (!price || price < 300000 || price > 800000) continue;\n\n  // ── Location: must include Surabaya ──\n  const locText = [\n    ad.location?.city?.name, ad.location?.area?.name,\n    ad.location?.subArea?.name, ad.title, ad.subject\n  ].filter(Boolean).join(' ').toLowerCase();\n  if (!locText.includes('surabaya') && !locText.includes('sby') &&\n      !locText.includes('jawa timur')) continue;\n\n  // ── Images ──\n  const rawImgs = ad.images || ad.photos || [];\n  const images = rawImgs\n    .map(img => {\n      if (typeof img === 'string') return img;\n      // OLX stores multiple resolutions\n      return img?.link || img?.url ||\n        img?.resolutions?.find(r => r.width >= 400)?.link ||\n        img?.resolutions?.[0]?.link || '';\n    })\n    .filter(u => u && u.startsWith('http'))\n    .slice(0, 5);\n  if (images.length === 0) continue;\n\n  // ── Dedup ──\n  const uid = 'olx_' + (ad.id || ad.listingId || ad.slug || '');\n  if (!uid.replace('olx_', '') || staticData.sentIds[uid]) continue;\n  staticData.sentIds[uid] = now;\n\n  // ── URL ──\n  const url = ad.url || ad.link || `https://www.olx.co.id/${ad.id}`;\n\n  output.push({\n    json: {\n      source: 'olx',\n      title: ad.title || ad.subject || 'Kos Surabaya',\n      price,\n      location: [\n        ad.location?.subArea?.name,\n        ad.location?.area?.name,\n        ad.location?.city?.name\n      ].filter(Boolean).join(', ') || 'Surabaya',\n      url: url.startsWith('http') ? url : 'https://www.olx.co.id' + url,\n      description: (ad.description || ad.shortDescription || '').slice(0, 500),\n      images,\n      scraped_at: new Date().toISOString()\n    }\n  });\n}\n\nconsole.log(`OLX: ${output.length} listings passed filters`);\nreturn output;"
+        },
+        "id": "olx-parse",
+        "name": "⚙️ Parse + Filter + Dedup (OLX)",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [900, 300]
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "strict" },
+            "conditions": [
+              {
+                "id": "has-items-olx",
+                "leftValue": "={{ $input.all().length }}",
+                "rightValue": 0,
+                "operator": { "type": "number", "operation": "gt" }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        },
+        "id": "olx-if",
+        "name": "🔎 Has Results? (OLX)",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2,
+        "position": [1120, 300]
+      },
+      {
+        "parameters": {
+          "batchSize": 1,
+          "options": {}
+        },
+        "id": "olx-split",
+        "name": "📦 Split Batches (OLX)",
+        "type": "n8n-nodes-base.splitInBatches",
+        "typeVersion": 3,
+        "position": [1340, 220]
+      },
+      {
+        "parameters": {
+          "url": "https://god-eye-134668262767.asia-southeast1.run.app/monitor",
+          "method": "POST",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              { "name": "X-Secret", "value": "={{ $env.N8N_SECRET }}" },
+              { "name": "Content-Type", "value": "application/json" }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify($json) }}",
+          "options": {
+            "timeout": 15000,
+            "response": { "response": { "neverError": true } }
+          }
+        },
+        "id": "olx-send",
+        "name": "📡 Send to God Eye (OLX)",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [1560, 220]
+      },
+      {
+        "parameters": {},
+        "id": "olx-noop",
+        "name": "🚫 No Results (OLX)",
+        "type": "n8n-nodes-base.noOp",
+        "typeVersion": 1,
+        "position": [1340, 400]
+      }
+    ],
+    "connections": {
+      "⏰ Schedule OLX": {
+        "main": [[{ "node": "🎲 Random UA (OLX)", "type": "main", "index": 0 }]]
+      },
+      "🎲 Random UA (OLX)": {
+        "main": [[{ "node": "🌐 Fetch OLX API", "type": "main", "index": 0 }]]
+      },
+      "🌐 Fetch OLX API": {
+        "main": [[{ "node": "⚙️ Parse + Filter + Dedup (OLX)", "type": "main", "index": 0 }]]
+      },
+      "⚙️ Parse + Filter + Dedup (OLX)": {
+        "main": [[{ "node": "🔎 Has Results? (OLX)", "type": "main", "index": 0 }]]
+      },
+      "🔎 Has Results? (OLX)": {
+        "main": [
+          [{ "node": "📦 Split Batches (OLX)", "type": "main", "index": 0 }],
+          [{ "node": "🚫 No Results (OLX)", "type": "main", "index": 0 }]
+        ]
+      },
+      "📦 Split Batches (OLX)": {
+        "main": [[{ "node": "📡 Send to God Eye (OLX)", "type": "main", "index": 0 }]]
+      }
+    },
+    "settings": { "executionOrder": "v1" }
+  },
+
+  {
+    "name": "🏠 Tier1 — 99.co Hunter (Every 5h)",
+    "nodes": [
+      {
+        "parameters": {
+          "rule": {
+            "interval": [{ "field": "hours", "hoursInterval": 5 }]
+          }
+        },
+        "id": "99co-trigger",
+        "name": "⏰ Schedule 99co",
+        "type": "n8n-nodes-base.scheduleTrigger",
+        "typeVersion": 1.1,
+        "position": [240, 300]
+      },
+      {
+        "parameters": {
+          "jsCode": "const UAS = [\n  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',\n  'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15',\n  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',\n  'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0',\n  'Mozilla/5.0 (iPad; CPU OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1'\n];\nconst ua = UAS[Math.floor(Math.random() * UAS.length)];\nreturn [{ json: { userAgent: ua } }];"
+        },
+        "id": "99co-ua",
+        "name": "🎲 Random UA (99co)",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [460, 300]
+      },
+      {
+        "parameters": {
+          "url": "https://www.99.co/id/api/v2/public/listings",
+          "sendQuery": true,
+          "queryParameters": {
+            "parameters": [
+              { "name": "query", "value": "kos" },
+              { "name": "listing_type", "value": "rent" },
+              { "name": "property_type[]", "value": "boarding_house" },
+              { "name": "city_name", "value": "surabaya" },
+              { "name": "price_min", "value": "300000" },
+              { "name": "price_max", "value": "800000" },
+              { "name": "sort_by", "value": "created_at" },
+              { "name": "sort_order", "value": "desc" },
+              { "name": "page_size", "value": "30" }
+            ]
+          },
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              { "name": "User-Agent", "value": "={{ $('🎲 Random UA (99co)').item.json.userAgent }}" },
+              { "name": "Accept", "value": "application/json" },
+              { "name": "Accept-Language", "value": "id-ID,id;q=0.9" },
+              { "name": "Referer", "value": "https://www.99.co/id/cari/kos-disewa" },
+              { "name": "Origin", "value": "https://www.99.co" }
+            ]
+          },
+          "options": {
+            "timeout": 30000,
+            "redirect": { "redirect": { "followRedirects": true, "maxRedirects": 3 } }
+          }
+        },
+        "id": "99co-fetch",
+        "name": "🌐 Fetch 99co API",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [680, 300]
+      },
+      {
+        "parameters": {
+          "jsCode": "// ── 99.co: Parse + Filter + Deduplicate ──\nconst staticData = $getWorkflowStaticData('global');\nif (!staticData.sentIds) staticData.sentIds = {};\n\nconst now = Date.now();\nfor (const id in staticData.sentIds) {\n  if (now - staticData.sentIds[id] > 86400000) delete staticData.sentIds[id];\n}\n\nconst raw = $input.first().json;\n// 99.co API: data.listings or results\nconst listings = raw.data?.listings || raw.data?.results || raw.listings || raw.results || [];\nif (!Array.isArray(listings)) {\n  console.log('99co: unexpected shape', JSON.stringify(raw).slice(0, 200));\n  return [];\n}\n\nconst output = [];\n\nfor (const listing of listings) {\n  // ── Price filter ──\n  const priceRaw = listing.price_formatted?.raw ||\n    listing.price?.amount || listing.price || 0;\n  const price = parseInt(String(priceRaw).replace(/\\D/g, ''));\n  if (!price || price < 300000 || price > 800000) continue;\n\n  // ── Location ──\n  const locText = [\n    listing.address, listing.city, listing.district,\n    listing.area_name, listing.title, listing.name\n  ].filter(Boolean).join(' ').toLowerCase();\n  if (!locText.includes('surabaya') && !locText.includes('sby') &&\n      !locText.includes('jawa timur')) continue;\n\n  // ── Images ──\n  const rawPhotos = listing.photos || listing.images || listing.pictures || [];\n  const images = rawPhotos\n    .map(p => {\n      if (typeof p === 'string') return p;\n      return p?.url || p?.full_url || p?.photo_url ||\n        p?.sizes?.large || p?.sizes?.medium || p?.src || '';\n    })\n    .filter(u => u && u.startsWith('http'))\n    .slice(0, 5);\n  if (images.length === 0) continue;\n\n  // ── Dedup ──\n  const uid = '99co_' + (listing.id || listing.listing_id || listing.slug || '');\n  if (!uid.replace('99co_', '') || staticData.sentIds[uid]) continue;\n  staticData.sentIds[uid] = now;\n\n  // ── URL ──\n  const slug = listing.slug || listing.id;\n  const url = listing.url || listing.link ||\n    `https://www.99.co/id/properti/${slug}`;\n\n  output.push({\n    json: {\n      source: '99co',\n      title: listing.title || listing.name || 'Kos Surabaya',\n      price,\n      location: [\n        listing.address, listing.district, listing.city\n      ].filter(Boolean).join(', ') || 'Surabaya',\n      url: url.startsWith('http') ? url : 'https://www.99.co' + url,\n      description: (listing.description || listing.short_description || '').slice(0, 500),\n      images,\n      scraped_at: new Date().toISOString()\n    }\n  });\n}\n\nconsole.log(`99co: ${output.length} listings passed filters`);\nreturn output;"
+        },
+        "id": "99co-parse",
+        "name": "⚙️ Parse + Filter + Dedup (99co)",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [900, 300]
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "strict" },
+            "conditions": [
+              {
+                "id": "has-items-99co",
+                "leftValue": "={{ $input.all().length }}",
+                "rightValue": 0,
+                "operator": { "type": "number", "operation": "gt" }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        },
+        "id": "99co-if",
+        "name": "🔎 Has Results? (99co)",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2,
+        "position": [1120, 300]
+      },
+      {
+        "parameters": {
+          "batchSize": 1,
+          "options": {}
+        },
+        "id": "99co-split",
+        "name": "📦 Split Batches (99co)",
+        "type": "n8n-nodes-base.splitInBatches",
+        "typeVersion": 3,
+        "position": [1340, 220]
+      },
+      {
+        "parameters": {
+          "url": "https://god-eye-134668262767.asia-southeast1.run.app/monitor",
+          "method": "POST",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              { "name": "X-Secret", "value": "={{ $env.N8N_SECRET }}" },
+              { "name": "Content-Type", "value": "application/json" }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify($json) }}",
+          "options": {
+            "timeout": 15000,
+            "response": { "response": { "neverError": true } }
+          }
+        },
+        "id": "99co-send",
+        "name": "📡 Send to God Eye (99co)",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [1560, 220]
+      },
+      {
+        "parameters": {},
+        "id": "99co-noop",
+        "name": "🚫 No Results (99co)",
+        "type": "n8n-nodes-base.noOp",
+        "typeVersion": 1,
+        "position": [1340, 400]
+      }
+    ],
+    "connections": {
+      "⏰ Schedule 99co": {
+        "main": [[{ "node": "🎲 Random UA (99co)", "type": "main", "index": 0 }]]
+      },
+      "🎲 Random UA (99co)": {
+        "main": [[{ "node": "🌐 Fetch 99co API", "type": "main", "index": 0 }]]
+      },
+      "🌐 Fetch 99co API": {
+        "main": [[{ "node": "⚙️ Parse + Filter + Dedup (99co)", "type": "main", "index": 0 }]]
+      },
+      "⚙️ Parse + Filter + Dedup (99co)": {
+        "main": [[{ "node": "🔎 Has Results? (99co)", "type": "main", "index": 0 }]]
+      },
+      "🔎 Has Results? (99co)": {
+        "main": [
+          [{ "node": "📦 Split Batches (99co)", "type": "main", "index": 0 }],
+          [{ "node": "🚫 No Results (99co)", "type": "main", "index": 0 }]
+        ]
+      },
+      "📦 Split Batches (99co)": {
+        "main": [[{ "node": "📡 Send to God Eye (99co)", "type": "main", "index": 0 }]]
+      }
+    },
+    "settings": { "executionOrder": "v1" }
+  }
+]

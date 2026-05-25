@@ -1,0 +1,259 @@
+"""
+bot/formatter.py  (v3.1)
+Format laporan analisis kos ke Telegram Markdown.
+Mendukung split otomatis untuk pesan >4096 karakter.
+
+Input:  AnalysisResult (engine/analyzer.py)
+Output: string Markdown siap kirim ke Telegram
+"""
+from __future__ import annotations
+
+from engine.analyzer import AnalysisResult
+from engine.maps_client import MapsResult
+
+UBAYA_LAT = -7.3275
+UBAYA_LNG = 112.7858
+
+_TYPE_ICON = {
+    "supermarket": "🛒",
+    "hospital":    "🏥",
+    "police":      "👮",
+    "atm":         "🏧",
+    "mosque":      "🕌",
+    "laundry":     "👕",
+}
+
+_AQI_LABEL = [
+    (50,  "Baik 😊"),
+    (100, "Sedang 😐"),
+    (150, "Tidak Sehat (Sensitif) 😷"),
+    (200, "Tidak Sehat 😷"),
+    (999, "Sangat Berbahaya ☠️"),
+]
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _score_emoji(score: int | None) -> str:
+    if score is None:
+        return "⚪"
+    if score >= 80: return "🟢"
+    if score >= 60: return "🟡"
+    if score >= 40: return "🟠"
+    return "�"
+
+
+def _price_label(price: int | None) -> str:
+    if price is None:
+        return ""
+    tiers = [
+        (450_000,  "💎 Sangat murah"),
+        (550_000,  "✅ Ideal"),
+        (650_000,  "👍 Wajar"),
+        (750_000,  "⚠️ Agak mahal"),
+    ]
+    for threshold, label in tiers:
+        if price < threshold:
+            return label
+    return "❌ Mahal"
+
+
+def _aqi_label(aqi: int | None) -> str:
+    if aqi is None:
+        return "Tidak diketahui"
+    for limit, label in _AQI_LABEL:
+        if aqi <= limit:
+            return label
+    return "Tidak diketahui"
+
+
+def _travel_lines(routes: list) -> str:
+    if not routes:
+        return "_Tidak ada data rute_"
+    icons = {"pagi": "🌅", "siang": "🌞", "malam": "🌙"}
+    lines = []
+    for r in routes:
+        label = r.get("label", "")
+        dur   = r.get("duration_minutes")
+        km    = r.get("distance_km")
+        prefix = label.split("_")[0] if "_" in label else label
+        icon   = icons.get(prefix, "�")
+        time_str = label.replace("_", " ").capitalize()
+        if dur is not None:
+            lines.append(f"{icon} {time_str} → {dur} mnt ({km} km)")
+        else:
+            lines.append(f"{icon} {time_str} → _gagal fetch_")
+    return "\n".join(lines)
+
+
+def _nearby_lines(nearby: list) -> str:
+    if not nearby:
+        return "_Tidak ada data_"
+    out = []
+    for item in nearby:
+        icon  = _TYPE_ICON.get(item["type"], "📍")
+        label = item["type"].capitalize()
+        if item.get("found"):
+            out.append(f"{icon} {label}: {item.get('name', '-')}")
+        else:
+            out.append(f"{icon} {label}: _tidak ada_")
+    return "\n".join(out)
+
+
+def _maps_url(lat: float, lng: float) -> str:
+    return f"https://www.google.com/maps/dir/{UBAYA_LAT},{UBAYA_LNG}/{lat},{lng}/"
+
+
+def _fraud_badge(risk: str) -> str:
+    return {"LOW": "✅ LOW", "MEDIUM": "⚠️ MEDIUM", "HIGH": "❌ HIGH"}.get(risk, risk)
+
+
+# ── Main formatter ────────────────────────────────────────────────────────────
+
+def format_report(result: AnalysisResult) -> str:
+    """
+    Susun laporan lengkap dari AnalysisResult.
+    Gunakan field gemini_data (dict) jika ada, fallback ke gemini_raw (str).
+    Return string Markdown ≤4096 char; pakai split_message() jika lebih.
+    """
+    maps: MapsResult = result.maps
+
+    # Geocode → maps URL
+    if maps.geocode:
+        lat, lng = maps.geocode["lat"], maps.geocode["lng"]
+        maps_url = _maps_url(lat, lng)
+    else:
+        maps_url = ""
+
+    # Gemini data — bisa dict (v3.1) atau str (legacy fallback)
+    gd: dict = {}
+    if hasattr(result, "gemini_data") and isinstance(result.gemini_data, dict):
+        gd = result.gemini_data
+    gemini_text = result.gemini_raw or ""
+
+    room         = gd.get("room", {})
+    phone_check  = gd.get("phone_check", {})
+    area_info    = gd.get("area", {})
+    price_market = gd.get("price_market", {})
+    post_flags   = gd.get("post_flags", [])
+    authenticity = gd.get("authenticity", {})
+
+    # Room
+    room_size  = room.get("size", "-")
+    room_bed   = room.get("bed", "-")
+    facilities = room.get("facilities", [])
+    fac_str    = ", ".join(facilities) if facilities else "-"
+
+    # Area
+    crime_level = area_info.get("crime_level", "-")
+    safe_night  = "✅ Aman" if area_info.get("safe_night") else "⚠️ Perlu hati-hati"
+    area_notes  = area_info.get("notes", "")
+
+    # Price
+    price_val     = result.price_value
+    price_market_txt = price_market.get("assessment", result.budget_status or "")
+
+    # AQI
+    aq      = maps.air_quality or {}
+    aqi_val = aq.get("aqi")
+    aqi_cat = aq.get("category") or _aqi_label(aqi_val)
+
+    # Phone
+    phones_str = ", ".join(result.phones) if result.phones else "-"
+    gc_name    = phone_check.get("getcontact_name", "")
+    social     = phone_check.get("social_findings", "")
+
+    # Fraud
+    fraud_risk   = result.fraud_risk or "LOW"
+    fraud_detail = authenticity.get("reasoning") or result.deepseek_raw[:200] or "-"
+    flags_str    = "  ·  ".join(post_flags) if post_flags else ""
+
+    # Recommendation
+    recommendation = (
+        authenticity.get("recommendation")
+        or result.recommendation
+        or "-"
+    )
+
+    # Source link
+    src_line = f"📌 {result.source.upper()}"
+    if result.source_link:
+        src_line += f"  ·  {result.source_link}"
+
+    parts: list[str] = [
+        f"🔍 *GOD EYE*  ·  Score: {result.score}/100 {_score_emoji(result.score)}",
+        "━━━━━━━━━━━━━━━━━━━━━━",
+        src_line,
+        "",
+        "� *HARGA*",
+        f"Rp {price_val:,}/bln  {_price_label(int(price_val))}" if price_val else "Tidak diketahui",
+        price_market_txt,
+        "",
+        "📍 *LOKASI*",
+        maps.address_validated or result.location_hint or "Tidak diketahui",
+    ]
+    if maps_url:
+        parts.append(f"[🗺️ Lihat Rute ke UBAYA]({maps_url})")
+
+    parts += [
+        "",
+        "🚗 *PERJALANAN*",
+        _travel_lines(maps.routes),
+        "",
+        f"🌬️ AQI {aqi_val or '?'} — {aqi_cat}",
+        "",
+        "🏪 *FASILITAS 1KM*",
+        _nearby_lines(maps.nearby),
+        "",
+        "�️ *KAMAR*",
+        f"Ukuran: {room_size}  |  Kasur: {room_bed}",
+        f"Fasilitas: {fac_str}",
+        "",
+        "🛡️ *AREA*",
+        f"Kriminalitas: {crime_level}  |  Aman malam: {safe_night}",
+    ]
+    if area_notes:
+        parts.append(area_notes)
+
+    parts += [
+        "",
+        f"⚠️ *RISIKO: {_fraud_badge(fraud_risk)}*",
+        fraud_detail,
+    ]
+    if flags_str:
+        parts.append(f"🚩 {flags_str}")
+
+    phone_line = f"📱 `{phones_str}`"
+    if gc_name:
+        phone_line += f"  →  {gc_name}"
+    parts.append("")
+    parts.append(phone_line)
+    if social:
+        parts.append(social)
+
+    parts += [
+        "",
+        "🤖 *REKOMENDASI*",
+        recommendation,
+        "━━━━━━━━━━━━━━━━━━━━━━",
+        f"ID: `{result.listing_id}`",
+    ]
+
+    return "\n".join(p for p in parts if p is not None).strip()
+
+
+def split_message(text: str, max_len: int = 4096) -> list[str]:
+    """Pecah teks panjang menjadi list chunk ≤ max_len karakter."""
+    if len(text) <= max_len:
+        return [text]
+    chunks: list[str] = []
+    while text:
+        if len(text) <= max_len:
+            chunks.append(text)
+            break
+        cut = text.rfind("\n", 0, max_len)
+        if cut == -1:
+            cut = max_len
+        chunks.append(text[:cut])
+        text = text[cut:].lstrip("\n")
+    return chunks

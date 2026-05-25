@@ -1,0 +1,302 @@
+{
+  "name": "\ud83c\udfe0 Tier1 \u2014 OLX Hunter (Every 3h)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 3
+            }
+          ]
+        }
+      },
+      "id": "olx-trigger",
+      "name": "\u23f0 Schedule OLX",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const UAS = [\n  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',\n  'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15',\n  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',\n  'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0',\n  'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36'\n];\nconst ua = UAS[Math.floor(Math.random() * UAS.length)];\nreturn [{ json: { userAgent: ua } }];"
+      },
+      "id": "olx-ua",
+      "name": "\ud83c\udfb2 Random UA (OLX)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        460,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://www.olx.co.id/api/relevance/search",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "query",
+              "value": "kos surabaya"
+            },
+            {
+              "name": "catId",
+              "value": "1228"
+            },
+            {
+              "name": "priceMin",
+              "value": "300000"
+            },
+            {
+              "name": "priceMax",
+              "value": "800000"
+            },
+            {
+              "name": "sort",
+              "value": "date"
+            },
+            {
+              "name": "page",
+              "value": "1"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "={{ $('\ud83c\udfb2 Random UA (OLX)').item.json.userAgent }}"
+            },
+            {
+              "name": "Accept",
+              "value": "application/json, */*"
+            },
+            {
+              "name": "Accept-Language",
+              "value": "id-ID,id;q=0.9"
+            },
+            {
+              "name": "Referer",
+              "value": "https://www.olx.co.id/properti/disewa/kost_c1228/?search%5Bfilter_float_price%3Afrom%5D=300000&search%5Bfilter_float_price%3Ato%5D=800000"
+            },
+            {
+              "name": "x-origin",
+              "value": "https://www.olx.co.id"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000,
+          "redirect": {
+            "redirect": {
+              "followRedirects": true,
+              "maxRedirects": 3
+            }
+          }
+        }
+      },
+      "id": "olx-fetch",
+      "name": "\ud83c\udf10 Fetch OLX API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        680,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// \u2500\u2500 OLX: Parse + Filter + Deduplicate \u2500\u2500\nconst staticData = $getWorkflowStaticData('global');\nif (!staticData.sentIds) staticData.sentIds = {};\n\nconst now = Date.now();\nfor (const id in staticData.sentIds) {\n  if (now - staticData.sentIds[id] > 86400000) delete staticData.sentIds[id];\n}\n\nconst raw = $input.first().json;\n// OLX API: top-level ads array, atau nested\nconst ads = raw.data?.ads || raw.ads || raw.data || [];\nif (!Array.isArray(ads)) {\n  console.log('OLX: unexpected shape', JSON.stringify(raw).slice(0, 200));\n  return [];\n}\n\nconst output = [];\n\nfor (const ad of ads) {\n  // \u2500\u2500 Price \u2500\u2500\n  const priceRaw = ad.price?.value?.raw || ad.price?.raw ||\n    ad.priceValue || ad.price_value || 0;\n  const price = parseInt(String(priceRaw).replace(/\\D/g, ''));\n  if (!price || price < 300000 || price > 800000) continue;\n\n  // \u2500\u2500 Location: must include Surabaya \u2500\u2500\n  const locText = [\n    ad.location?.city?.name, ad.location?.area?.name,\n    ad.location?.subArea?.name, ad.title, ad.subject\n  ].filter(Boolean).join(' ').toLowerCase();\n  if (!locText.includes('surabaya') && !locText.includes('sby') &&\n      !locText.includes('jawa timur')) continue;\n\n  // \u2500\u2500 Images \u2500\u2500\n  const rawImgs = ad.images || ad.photos || [];\n  const images = rawImgs\n    .map(img => {\n      if (typeof img === 'string') return img;\n      // OLX stores multiple resolutions\n      return img?.link || img?.url ||\n        img?.resolutions?.find(r => r.width >= 400)?.link ||\n        img?.resolutions?.[0]?.link || '';\n    })\n    .filter(u => u && u.startsWith('http'))\n    .slice(0, 5);\n  if (images.length === 0) continue;\n\n  // \u2500\u2500 Dedup \u2500\u2500\n  const uid = 'olx_' + (ad.id || ad.listingId || ad.slug || '');\n  if (!uid.replace('olx_', '') || staticData.sentIds[uid]) continue;\n  staticData.sentIds[uid] = now;\n\n  // \u2500\u2500 URL \u2500\u2500\n  const url = ad.url || ad.link || `https://www.olx.co.id/${ad.id}`;\n\n  output.push({\n    json: {\n      source: 'olx',\n      title: ad.title || ad.subject || 'Kos Surabaya',\n      price,\n      location: [\n        ad.location?.subArea?.name,\n        ad.location?.area?.name,\n        ad.location?.city?.name\n      ].filter(Boolean).join(', ') || 'Surabaya',\n      url: url.startsWith('http') ? url : 'https://www.olx.co.id' + url,\n      description: (ad.description || ad.shortDescription || '').slice(0, 500),\n      images,\n      scraped_at: new Date().toISOString()\n    }\n  });\n}\n\nconsole.log(`OLX: ${output.length} listings passed filters`);\nreturn output;"
+      },
+      "id": "olx-parse",
+      "name": "\u2699\ufe0f Parse + Filter + Dedup (OLX)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        900,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "has-items-olx",
+              "leftValue": "={{ $input.all().length }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "olx-if",
+      "name": "\ud83d\udd0e Has Results? (OLX)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "olx-split",
+      "name": "\ud83d\udce6 Split Batches (OLX)",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        1340,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://god-eye-134668262767.asia-southeast1.run.app/monitor",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Secret",
+              "value": "={{ $env.N8N_SECRET }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "olx-send",
+      "name": "\ud83d\udce1 Send to God Eye (OLX)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1560,
+        220
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "olx-noop",
+      "name": "\ud83d\udeab No Results (OLX)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1340,
+        400
+      ]
+    }
+  ],
+  "connections": {
+    "\u23f0 Schedule OLX": {
+      "main": [
+        [
+          {
+            "node": "\ud83c\udfb2 Random UA (OLX)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "\ud83c\udfb2 Random UA (OLX)": {
+      "main": [
+        [
+          {
+            "node": "\ud83c\udf10 Fetch OLX API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "\ud83c\udf10 Fetch OLX API": {
+      "main": [
+        [
+          {
+            "node": "\u2699\ufe0f Parse + Filter + Dedup (OLX)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "\u2699\ufe0f Parse + Filter + Dedup (OLX)": {
+      "main": [
+        [
+          {
+            "node": "\ud83d\udd0e Has Results? (OLX)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "\ud83d\udd0e Has Results? (OLX)": {
+      "main": [
+        [
+          {
+            "node": "\ud83d\udce6 Split Batches (OLX)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "\ud83d\udeab No Results (OLX)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "\ud83d\udce6 Split Batches (OLX)": {
+      "main": [
+        [
+          {
+            "node": "\ud83d\udce1 Send to God Eye (OLX)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false,
+  "versionId": "1"
+}

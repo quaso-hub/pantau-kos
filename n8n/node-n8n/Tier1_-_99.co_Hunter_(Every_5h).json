@@ -1,0 +1,314 @@
+{
+  "name": "\ud83c\udfe0 Tier1 \u2014 99.co Hunter (Every 5h)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 5
+            }
+          ]
+        }
+      },
+      "id": "99co-trigger",
+      "name": "\u23f0 Schedule 99co",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const UAS = [\n  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',\n  'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15',\n  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',\n  'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0',\n  'Mozilla/5.0 (iPad; CPU OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1'\n];\nconst ua = UAS[Math.floor(Math.random() * UAS.length)];\nreturn [{ json: { userAgent: ua } }];"
+      },
+      "id": "99co-ua",
+      "name": "\ud83c\udfb2 Random UA (99co)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        460,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://www.99.co/id/api/v2/public/listings",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "query",
+              "value": "kos"
+            },
+            {
+              "name": "listing_type",
+              "value": "rent"
+            },
+            {
+              "name": "property_type[]",
+              "value": "boarding_house"
+            },
+            {
+              "name": "city_name",
+              "value": "surabaya"
+            },
+            {
+              "name": "price_min",
+              "value": "300000"
+            },
+            {
+              "name": "price_max",
+              "value": "800000"
+            },
+            {
+              "name": "sort_by",
+              "value": "created_at"
+            },
+            {
+              "name": "sort_order",
+              "value": "desc"
+            },
+            {
+              "name": "page_size",
+              "value": "30"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "={{ $('\ud83c\udfb2 Random UA (99co)').item.json.userAgent }}"
+            },
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "Accept-Language",
+              "value": "id-ID,id;q=0.9"
+            },
+            {
+              "name": "Referer",
+              "value": "https://www.99.co/id/cari/kos-disewa"
+            },
+            {
+              "name": "Origin",
+              "value": "https://www.99.co"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000,
+          "redirect": {
+            "redirect": {
+              "followRedirects": true,
+              "maxRedirects": 3
+            }
+          }
+        }
+      },
+      "id": "99co-fetch",
+      "name": "\ud83c\udf10 Fetch 99co API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        680,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// \u2500\u2500 99.co: Parse + Filter + Deduplicate \u2500\u2500\nconst staticData = $getWorkflowStaticData('global');\nif (!staticData.sentIds) staticData.sentIds = {};\n\nconst now = Date.now();\nfor (const id in staticData.sentIds) {\n  if (now - staticData.sentIds[id] > 86400000) delete staticData.sentIds[id];\n}\n\nconst raw = $input.first().json;\n// 99.co API: data.listings or results\nconst listings = raw.data?.listings || raw.data?.results || raw.listings || raw.results || [];\nif (!Array.isArray(listings)) {\n  console.log('99co: unexpected shape', JSON.stringify(raw).slice(0, 200));\n  return [];\n}\n\nconst output = [];\n\nfor (const listing of listings) {\n  // \u2500\u2500 Price filter \u2500\u2500\n  const priceRaw = listing.price_formatted?.raw ||\n    listing.price?.amount || listing.price || 0;\n  const price = parseInt(String(priceRaw).replace(/\\D/g, ''));\n  if (!price || price < 300000 || price > 800000) continue;\n\n  // \u2500\u2500 Location \u2500\u2500\n  const locText = [\n    listing.address, listing.city, listing.district,\n    listing.area_name, listing.title, listing.name\n  ].filter(Boolean).join(' ').toLowerCase();\n  if (!locText.includes('surabaya') && !locText.includes('sby') &&\n      !locText.includes('jawa timur')) continue;\n\n  // \u2500\u2500 Images \u2500\u2500\n  const rawPhotos = listing.photos || listing.images || listing.pictures || [];\n  const images = rawPhotos\n    .map(p => {\n      if (typeof p === 'string') return p;\n      return p?.url || p?.full_url || p?.photo_url ||\n        p?.sizes?.large || p?.sizes?.medium || p?.src || '';\n    })\n    .filter(u => u && u.startsWith('http'))\n    .slice(0, 5);\n  if (images.length === 0) continue;\n\n  // \u2500\u2500 Dedup \u2500\u2500\n  const uid = '99co_' + (listing.id || listing.listing_id || listing.slug || '');\n  if (!uid.replace('99co_', '') || staticData.sentIds[uid]) continue;\n  staticData.sentIds[uid] = now;\n\n  // \u2500\u2500 URL \u2500\u2500\n  const slug = listing.slug || listing.id;\n  const url = listing.url || listing.link ||\n    `https://www.99.co/id/properti/${slug}`;\n\n  output.push({\n    json: {\n      source: '99co',\n      title: listing.title || listing.name || 'Kos Surabaya',\n      price,\n      location: [\n        listing.address, listing.district, listing.city\n      ].filter(Boolean).join(', ') || 'Surabaya',\n      url: url.startsWith('http') ? url : 'https://www.99.co' + url,\n      description: (listing.description || listing.short_description || '').slice(0, 500),\n      images,\n      scraped_at: new Date().toISOString()\n    }\n  });\n}\n\nconsole.log(`99co: ${output.length} listings passed filters`);\nreturn output;"
+      },
+      "id": "99co-parse",
+      "name": "\u2699\ufe0f Parse + Filter + Dedup (99co)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        900,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "has-items-99co",
+              "leftValue": "={{ $input.all().length }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "99co-if",
+      "name": "\ud83d\udd0e Has Results? (99co)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "99co-split",
+      "name": "\ud83d\udce6 Split Batches (99co)",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        1340,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://god-eye-134668262767.asia-southeast1.run.app/monitor",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Secret",
+              "value": "={{ $env.N8N_SECRET }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "99co-send",
+      "name": "\ud83d\udce1 Send to God Eye (99co)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1560,
+        220
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "99co-noop",
+      "name": "\ud83d\udeab No Results (99co)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1340,
+        400
+      ]
+    }
+  ],
+  "connections": {
+    "\u23f0 Schedule 99co": {
+      "main": [
+        [
+          {
+            "node": "\ud83c\udfb2 Random UA (99co)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "\ud83c\udfb2 Random UA (99co)": {
+      "main": [
+        [
+          {
+            "node": "\ud83c\udf10 Fetch 99co API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "\ud83c\udf10 Fetch 99co API": {
+      "main": [
+        [
+          {
+            "node": "\u2699\ufe0f Parse + Filter + Dedup (99co)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "\u2699\ufe0f Parse + Filter + Dedup (99co)": {
+      "main": [
+        [
+          {
+            "node": "\ud83d\udd0e Has Results? (99co)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "\ud83d\udd0e Has Results? (99co)": {
+      "main": [
+        [
+          {
+            "node": "\ud83d\udce6 Split Batches (99co)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "\ud83d\udeab No Results (99co)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "\ud83d\udce6 Split Batches (99co)": {
+      "main": [
+        [
+          {
+            "node": "\ud83d\udce1 Send to God Eye (99co)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false,
+  "versionId": "1"
+}

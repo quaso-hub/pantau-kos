@@ -1,0 +1,296 @@
+{
+  "name": "\ud83c\udfe0 Tier2 \u2014 Sewakost Hunter (Every 4h)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 4
+            }
+          ]
+        }
+      },
+      "id": "sewa-trigger",
+      "name": "\u23f0 Schedule Sewakost",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const UAS = [\n  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',\n  'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15',\n  'Mozilla/5.0 (X11; Linux x86_64; rv:125.0) Gecko/20100101 Firefox/125.0',\n  'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0',\n  'Mozilla/5.0 (Linux; Android 14; Pixel 8 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36'\n];\nconst ua = UAS[Math.floor(Math.random() * UAS.length)];\nreturn [{ json: { userAgent: ua } }];"
+      },
+      "id": "sewa-ua",
+      "name": "\ud83c\udfb2 Random UA (Sewakost)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        460,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://sewakost.com/kost/surabaya/",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "sort",
+              "value": "new"
+            },
+            {
+              "name": "harga_min",
+              "value": "300000"
+            },
+            {
+              "name": "harga_max",
+              "value": "800000"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "={{ $('\ud83c\udfb2 Random UA (Sewakost)').item.json.userAgent }}"
+            },
+            {
+              "name": "Accept",
+              "value": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+            },
+            {
+              "name": "Accept-Language",
+              "value": "id-ID,id;q=0.9,en;q=0.8"
+            },
+            {
+              "name": "Referer",
+              "value": "https://sewakost.com/"
+            },
+            {
+              "name": "Upgrade-Insecure-Requests",
+              "value": "1"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 40000,
+          "redirect": {
+            "redirect": {
+              "followRedirects": true,
+              "maxRedirects": 5
+            }
+          },
+          "response": {
+            "response": {
+              "responseFormat": "text",
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "sewa-fetch",
+      "name": "\ud83c\udf10 Fetch Sewakost HTML",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        680,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// \u2500\u2500 Sewakost: Regex HTML Parse + Filter + Dedup \u2500\u2500\nconst staticData = $getWorkflowStaticData('global');\nif (!staticData.sentIds) staticData.sentIds = {};\n\nconst now = Date.now();\nfor (const id in staticData.sentIds) {\n  if (now - staticData.sentIds[id] > 86400000) delete staticData.sentIds[id];\n}\n\nconst html = $input.first().json.data || $input.first().json.body || '';\nif (!html || html.length < 500) {\n  console.log('Sewakost: empty or blocked');\n  return [];\n}\n\n// \u2500\u2500 Try JSON-LD / structured data first \u2500\u2500\nconst jsonLdMatches = [...html.matchAll(/<script[^>]+type=[\"']application\\/ld\\+json[\"'][^>]*>([\\s\\S]*?)<\\/script>/g)];\nconst output = [];\n\nfor (const match of jsonLdMatches) {\n  try {\n    const ld = JSON.parse(match[1]);\n    const items = Array.isArray(ld) ? ld : [ld];\n    for (const item of items) {\n      if (!item['@type'] || !['Product', 'LodgingBusiness', 'Accommodation'].includes(item['@type'])) continue;\n      const priceStr = item?.offers?.price || item?.priceRange || '0';\n      const price = parseInt(String(priceStr).replace(/\\D/g, ''));\n      if (!price || price < 300000 || price > 800000) continue;\n\n      const locText = [item.name, item.description, item?.address?.streetAddress,\n        item?.address?.addressLocality].filter(Boolean).join(' ').toLowerCase();\n      if (!locText.includes('surabaya') && !locText.includes('sby')) continue;\n\n      const imgs = (item.image ? (Array.isArray(item.image) ? item.image : [item.image]) : [])\n        .map(i => typeof i === 'string' ? i : i?.url || '').filter(u => u.startsWith('http')).slice(0, 5);\n      if (imgs.length === 0) continue;\n\n      const uid = 'sewa_' + (item['@id'] || item.url || item.name || '').replace(/[^a-z0-9]/gi, '_').slice(0, 30);\n      if (staticData.sentIds[uid]) continue;\n      staticData.sentIds[uid] = now;\n\n      output.push({\n        json: {\n          source: 'sewakost',\n          title: item.name || 'Kos Surabaya',\n          price,\n          location: [item?.address?.streetAddress, item?.address?.addressLocality].filter(Boolean).join(', ') || 'Surabaya',\n          url: item['@id'] || item.url || 'https://sewakost.com/kost/surabaya/',\n          description: (item.description || '').slice(0, 500),\n          images: imgs,\n          scraped_at: new Date().toISOString()\n        }\n      });\n    }\n  } catch(e) {}\n}\n\nif (output.length > 0) {\n  console.log(`Sewakost (JSON-LD): ${output.length} listings`);\n  return output;\n}\n\n// \u2500\u2500 Regex fallback: Sewakost card structure \u2500\u2500\n// Cards typically: <div class=\"kost-item\"> or <article class=\"kost\">\nconst cardBlocks = html.split(/<div[^>]+class=\"[^\"]*(?:kost-item|listing-item|property-item|item-kos)[^\"]*\"/g).slice(1);\n\nfor (let i = 0; i < Math.min(cardBlocks.length, 20); i++) {\n  const block = cardBlocks[i].slice(0, 3000); // Each card block\n\n  // Extract URL\n  const urlMatch = block.match(/href=[\"'](https?:\\/\\/sewakost\\.com\\/[^\"']+|\\/kost\\/[^\"']+)[\"']/);\n  const url = urlMatch ? (urlMatch[1].startsWith('http') ? urlMatch[1] : 'https://sewakost.com' + urlMatch[1]) : null;\n  if (!url) continue;\n\n  // Extract price\n  const priceMatch = block.match(/Rp[\\s.]*([\\d]{3}[\\d.,]*)/);\n  if (!priceMatch) continue;\n  const price = parseInt(priceMatch[1].replace(/[.,]/g, ''));\n  if (price < 300000 || price > 800000) continue;\n\n  // Location must be Surabaya \u2014 verified from page URL\n  // (we fetched /kost/surabaya/ so all cards ARE Surabaya)\n\n  // Extract title\n  const titleMatch = block.match(/<(?:h[23]|a)[^>]*>\\s*([^<]{5,100})\\s*<\\/(?:h[23]|a)>/);\n  const title = titleMatch ? titleMatch[1].trim() : 'Kos Surabaya';\n\n  // Extract images\n  const imgs = [...block.matchAll(/(?:data-src|src)=[\"'](https?:\\/\\/[^\"']+\\.(?:jpg|jpeg|webp|png)(?:\\?[^\"']*)?)[\"']/g)]\n    .map(m => m[1]).filter((u, idx, arr) => arr.indexOf(u) === idx).slice(0, 5);\n  if (imgs.length === 0) continue;\n\n  // Dedup\n  const uid = 'sewa_' + url.split('/').slice(-3).join('_').replace(/[^a-z0-9_]/gi, '');\n  if (staticData.sentIds[uid]) continue;\n  staticData.sentIds[uid] = now;\n\n  // Extract address\n  const adrMatch = block.match(/(?:alamat|lokasi|jl\\.|jalan)[^<]{0,5}<[^>]+>([^<]{5,80})/) ||\n    block.match(/<(?:span|p)[^>]*(?:address|location|alamat)[^>]*>([^<]{5,80})/);\n  const location = adrMatch ? adrMatch[1].trim() + ', Surabaya' : 'Surabaya';\n\n  output.push({\n    json: {\n      source: 'sewakost',\n      title,\n      price,\n      location,\n      url,\n      description: '',\n      images: imgs,\n      scraped_at: new Date().toISOString()\n    }\n  });\n}\n\nconsole.log(`Sewakost (regex): ${output.length} listings`);\nreturn output;"
+      },
+      "id": "sewa-parse",
+      "name": "\u2699\ufe0f Parse + Filter + Dedup (Sewakost)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        900,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "has-items-sewa",
+              "leftValue": "={{ $input.all().length }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "sewa-if",
+      "name": "\ud83d\udd0e Has Results? (Sewakost)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "sewa-split",
+      "name": "\ud83d\udce6 Split Batches (Sewakost)",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        1340,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://god-eye-134668262767.asia-southeast1.run.app/monitor",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Secret",
+              "value": "={{ $env.N8N_SECRET }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "sewa-send",
+      "name": "\ud83d\udce1 Send to God Eye (Sewakost)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1560,
+        220
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "sewa-noop",
+      "name": "\ud83d\udeab No Results (Sewakost)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1340,
+        400
+      ]
+    }
+  ],
+  "connections": {
+    "\u23f0 Schedule Sewakost": {
+      "main": [
+        [
+          {
+            "node": "\ud83c\udfb2 Random UA (Sewakost)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "\ud83c\udfb2 Random UA (Sewakost)": {
+      "main": [
+        [
+          {
+            "node": "\ud83c\udf10 Fetch Sewakost HTML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "\ud83c\udf10 Fetch Sewakost HTML": {
+      "main": [
+        [
+          {
+            "node": "\u2699\ufe0f Parse + Filter + Dedup (Sewakost)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "\u2699\ufe0f Parse + Filter + Dedup (Sewakost)": {
+      "main": [
+        [
+          {
+            "node": "\ud83d\udd0e Has Results? (Sewakost)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "\ud83d\udd0e Has Results? (Sewakost)": {
+      "main": [
+        [
+          {
+            "node": "\ud83d\udce6 Split Batches (Sewakost)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "\ud83d\udeab No Results (Sewakost)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "\ud83d\udce6 Split Batches (Sewakost)": {
+      "main": [
+        [
+          {
+            "node": "\ud83d\udce1 Send to God Eye (Sewakost)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false,
+  "versionId": "1"
+}

@@ -1,0 +1,83 @@
+{
+  "name": "OLX + 99.co Kos Scraper",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "hours", "hoursInterval": 3 }] }
+      },
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://www.olx.co.id/api/relevance/search?query=kos+surabaya&location=surabaya&catId=1228&priceMin=300000&priceMax=800000&sort=date",
+        "options": {
+          "headers": {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept": "application/json"
+          }
+        }
+      },
+      "name": "Fetch OLX",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [460, 200]
+    },
+    {
+      "parameters": {
+        "url": "https://www.99.co/id/api/v2/public/listings?query=kos&city_name=surabaya&price_min=300000&price_max=800000&sort_by=created_at&order_by=desc&page_size=20",
+        "options": {
+          "headers": {
+            "User-Agent": "Mozilla/5.0"
+          }
+        }
+      },
+      "name": "Fetch 99.co",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [460, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = [];\n\n// Parse OLX\ntry {\n  const olxData = $('Fetch OLX').first().json;\n  const olxAds = olxData.data?.ads || olxData.ads || [];\n  for (const ad of olxAds) {\n    const price = ad.price?.value?.raw || 0;\n    if (price < 300000 || price > 800000) continue;\n    items.push({\n      source: 'olx',\n      title: ad.title || '',\n      price: price,\n      location: ad.location?.name || ad.locations?.[0]?.name || '',\n      url: `https://www.olx.co.id/item/${ad.url || ad.id}`,\n      description: ad.description || '',\n      images: (ad.images || []).slice(0, 3).map(i => i?.url || ''),\n      scraped_at: new Date().toISOString()\n    });\n  }\n} catch(e) { console.error('OLX parse error:', e.message); }\n\n// Parse 99.co\ntry {\n  const coData = $('Fetch 99.co').first().json;\n  const listings = coData.listings || coData.data || [];\n  for (const listing of listings) {\n    const price = listing.price_formatted?.raw || listing.price || 0;\n    if (price < 300000 || price > 800000) continue;\n    items.push({\n      source: '99co',\n      title: listing.title || '',\n      price: price,\n      location: listing.address || listing.location || '',\n      url: `https://www.99.co/id/dijual/${listing.slug || listing.id}`,\n      description: listing.description || '',\n      images: (listing.photos || []).slice(0, 3).map(p => p.url || p),\n      scraped_at: new Date().toISOString()\n    });\n  }\n} catch(e) { console.error('99.co parse error:', e.message); }\n\nreturn items;"
+      },
+      "name": "Merge & Parse",
+      "type": "n8n-nodes-base.code",
+      "position": [700, 300]
+    },
+    {
+      "parameters": { "batchSize": 1, "options": {} },
+      "name": "Split",
+      "type": "n8n-nodes-base.splitInBatches",
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://god-eye-134668262767.asia-southeast1.run.app/monitor",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "X-Secret", "value": "={{$env.N8N_SECRET}}" }]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={{$json}}",
+        "options": { "timeout": 15000 }
+      },
+      "name": "Send to God Eye",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1100, 300]
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [{ "node": "Fetch OLX", "type": "main", "index": 0 }],
+        [{ "node": "Fetch 99.co", "type": "main", "index": 0 }]
+      ]
+    },
+    "Fetch OLX": { "main": [[{ "node": "Merge & Parse", "type": "main", "index": 0 }]] },
+    "Fetch 99.co": { "main": [[{ "node": "Merge & Parse", "type": "main", "index": 1 }]] },
+    "Merge & Parse": { "main": [[{ "node": "Split", "type": "main", "index": 0 }]] },
+    "Split": { "main": [[{ "node": "Send to God Eye", "type": "main", "index": 0 }]] }
+  }
+}

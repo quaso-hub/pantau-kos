@@ -1,0 +1,68 @@
+{
+  "name": "Mamikos Kos Scraper",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "hours", "hoursInterval": 2 }] }
+      },
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://mamikos.com/cari/surabaya--jawa-timur--indonesia?q=kos&price_min=300000&price_max=750000&type=monthly&sort=latest",
+        "options": {
+          "timeout": 30000,
+          "headers": {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+          }
+        }
+      },
+      "name": "Fetch Mamikos",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse Mamikos response\n// Mamikos returns JSON di endpoint API mereka\nconst items = [];\ntry {\n  const data = $input.first().json;\n  // Mamikos biasanya punya field 'data' atau 'rooms'\n  const rooms = data.data || data.rooms || data.results || [];\n  \n  for (const room of rooms) {\n    const price = room.price_per_month || room.price || 0;\n    if (price < 300000 || price > 800000) continue;\n    \n    items.push({\n      source: 'mamikos',\n      title: room.name || room.title || '',\n      price: price,\n      location: room.address || room.location || room.area || '',\n      url: `https://mamikos.com/kamar/${room.slug || room.id}`,\n      description: room.description || '',\n      images: (room.photos || room.images || []).slice(0, 3).map(p => p.url || p),\n      scraped_at: new Date().toISOString()\n    });\n  }\n} catch(e) {\n  console.error('Parse error:', e.message);\n}\n\nreturn items;"
+      },
+      "name": "Parse Listings",
+      "type": "n8n-nodes-base.code",
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "name": "Split In Batches",
+      "type": "n8n-nodes-base.splitInBatches",
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://god-eye-134668262767.asia-southeast1.run.app/monitor",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "X-Secret", "value": "={{$env.N8N_SECRET}}" }]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [{ "name": "=", "value": "={{JSON.stringify($json)}}" }]
+        },
+        "options": { "timeout": 10000 }
+      },
+      "name": "Send to God Eye",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1120, 300]
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": { "main": [[{ "node": "Fetch Mamikos", "type": "main", "index": 0 }]] },
+    "Fetch Mamikos": { "main": [[{ "node": "Parse Listings", "type": "main", "index": 0 }]] },
+    "Parse Listings": { "main": [[{ "node": "Split In Batches", "type": "main", "index": 0 }]] },
+    "Split In Batches": { "main": [[{ "node": "Send to God Eye", "type": "main", "index": 0 }]] }
+  }
+}
