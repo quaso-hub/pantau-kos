@@ -82,6 +82,25 @@ class FirestoreConfig:
 
 
 @dataclass(frozen=True)
+class PostgresConfig:
+    """PostgreSQL connection configuration (Neon, local, etc)."""
+    url: str = ""
+    
+    @classmethod
+    def from_env(cls) -> "PostgresConfig":
+        # DATABASE_URL takes priority, else build from components
+        url = os.environ.get("DATABASE_URL", "")
+        if not url:
+            host = os.environ.get("DATABASE_HOST", "localhost")
+            port = os.environ.get("DATABASE_PORT", "5432")
+            user = os.environ.get("DATABASE_USER", "postgres")
+            password = os.environ.get("DATABASE_PASSWORD", "")
+            database = os.environ.get("DATABASE_NAME", "kos")
+            url = f"postgresql://{user}:{password}@{host}:{port}/{database}?sslmode=require"
+        return cls(url=url)
+
+
+@dataclass(frozen=True)
 class MonitorConfig:
     """Filter thresholds for the n8n scraper monitor."""
     price_min: int = 300_000
@@ -108,6 +127,7 @@ class AppConfig:
     deepseek: DeepSeekConfig = field(default_factory=DeepSeekConfig)
     maps: MapsConfig = field(default_factory=MapsConfig)
     firestore: FirestoreConfig = field(default_factory=FirestoreConfig)
+    postgres: PostgresConfig = field(default_factory=PostgresConfig)
     monitor: MonitorConfig = field(default_factory=MonitorConfig)
 
     @classmethod
@@ -118,5 +138,6 @@ class AppConfig:
             deepseek=DeepSeekConfig.from_env(),
             maps=MapsConfig.from_env(),
             firestore=FirestoreConfig.from_env(),
+            postgres=PostgresConfig.from_env(),
             monitor=MonitorConfig.from_env(),
         )

@@ -40,6 +40,7 @@ from telegram.ext import (
 from infrastructure.config import AppConfig
 from infrastructure.container import Container
 from infrastructure.logger import setup_logging, get_logger
+from infrastructure.migrations import init_database
 from adapters.controllers.telegram_handlers import (
     STATE_BUDGET,
     STATE_CONFIRM,
@@ -71,6 +72,30 @@ config = AppConfig.from_env()
 TELEGRAM_TOKEN  = config.telegram.token
 ALLOWED_CHAT_ID = config.telegram.allowed_chat_id
 N8N_SECRET      = config.telegram.n8n_webhook_secret
+
+# -- Initialize PostgreSQL Database -------------------------------------------
+async def _init_db() -> None:
+    """Initialize PostgreSQL connection pool and run migrations."""
+    try:
+        db_url = config.postgres.url
+        if not db_url:
+            log.error("DATABASE_URL not configured -- cannot initialize database")
+            raise RuntimeError("DATABASE_URL environment variable not set")
+        
+        pool = await init_database(db_url)
+        log.info("✅ PostgreSQL database initialized successfully")
+    except Exception as exc:
+        log.critical(f"❌ Failed to initialize database: {exc}", exc_info=True)
+        raise
+
+
+# Initialize database at startup
+try:
+    asyncio.run(_init_db())
+except Exception as exc:
+    log.critical(f"Cannot start without database: {exc}")
+    sys.exit(1)
+
 
 _BOT_COMMANDS = [
     BotCommand("start",    "Initialize God Eye -- system status"),

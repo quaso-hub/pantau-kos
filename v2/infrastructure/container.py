@@ -62,23 +62,23 @@ class Container:
     def build(cls, config: AppConfig) -> "Container":
         """Wire all concrete implementations."""
         # Lazy imports to avoid circular dependencies
-        from adapters.repositories.firestore_repo import (
-            FirestoreListingRepo,
-            FirestorePreferencesRepo,
-            FirestoreBlacklistRepo,
-            FirestoreAreaCacheRepo,
-            FirestoreSessionRepo,
+        from adapters.repositories.postgres_repo import (
+            PostgresListingRepo,
+            PostgresPreferencesRepo,
+            PostgresBlacklistRepo,
+            PostgresAreaCacheRepo,
+            PostgresSessionRepo,
         )
         from adapters.gateways.gemini_gateway import GeminiGateway
         from adapters.gateways.deepseek_gateway import DeepSeekGateway
         from adapters.gateways.maps_gateway import GoogleMapsGateway
 
-        # 1. Repositories
-        listing_repo = FirestoreListingRepo(config.firestore)
-        preferences_repo = FirestorePreferencesRepo(config.firestore)
-        blacklist_repo = FirestoreBlacklistRepo(config.firestore)
-        area_cache_repo = FirestoreAreaCacheRepo(config.firestore)
-        session_repo = FirestoreSessionRepo(config.firestore)
+        # 1. Repositories (now PostgreSQL-backed)
+        listing_repo = PostgresListingRepo(config.postgres)
+        preferences_repo = PostgresPreferencesRepo(config.postgres)
+        blacklist_repo = PostgresBlacklistRepo(config.postgres)
+        area_cache_repo = PostgresAreaCacheRepo(config.postgres)
+        session_repo = PostgresSessionRepo(config.postgres)
 
         # 2. Gateways
         gemini_gw = GeminiGateway(config.gemini)
