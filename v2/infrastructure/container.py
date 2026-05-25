@@ -69,7 +69,7 @@ class Container:
             PostgresAreaCacheRepo,
             PostgresSessionRepo,
         )
-        from adapters.gateways.gemini_gateway import GeminiGateway
+        from adapters.gateways.openrouter_gateway import OpenRouterGateway
         from adapters.gateways.deepseek_gateway import DeepSeekGateway
         from adapters.gateways.maps_gateway import GoogleMapsGateway
 
@@ -81,13 +81,13 @@ class Container:
         session_repo = PostgresSessionRepo(config.postgres)
 
         # 2. Gateways
-        gemini_gw = GeminiGateway(config.gemini)
+        openrouter_gw = OpenRouterGateway(config.openrouter)
         deepseek_gw = DeepSeekGateway(config.deepseek)
         maps_gw = GoogleMapsGateway(config.maps)
 
         # 3. Services (depend on repos + gateways — no circular deps)
         analysis_svc = AnalysisService(
-            gemini=gemini_gw,
+            openrouter=openrouter_gw,
             deepseek=deepseek_gw,
             maps=maps_gw,
             listing_repo=listing_repo,

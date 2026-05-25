@@ -23,15 +23,17 @@ class TelegramConfig:
 
 
 @dataclass(frozen=True)
-class GeminiConfig:
+class OpenRouterConfig:
     api_key: str = ""
-    model: str = "gemini-3.1-pro-preview"
+    model: str = "deepseek/deepseek-v4-flash:free"
+    base_url: str = "https://openrouter.io/api/v1"
 
     @classmethod
-    def from_env(cls) -> "GeminiConfig":
+    def from_env(cls) -> "OpenRouterConfig":
         return cls(
-            api_key=os.environ["GEMINI_API_KEY"],
-            model=os.environ.get("GEMINI_MODEL", "gemini-3.1-pro-preview"),
+            api_key=os.environ.get("OPENROUTER_API_KEY", ""),
+            model=os.environ.get("OPENROUTER_MODEL", "deepseek/deepseek-v4-flash:free"),
+            base_url=os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.io/api/v1"),
         )
 
 
@@ -123,7 +125,7 @@ class MonitorConfig:
 class AppConfig:
     """Top-level composition of all config sections."""
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
-    gemini: GeminiConfig = field(default_factory=GeminiConfig)
+    openrouter: OpenRouterConfig = field(default_factory=OpenRouterConfig)
     deepseek: DeepSeekConfig = field(default_factory=DeepSeekConfig)
     maps: MapsConfig = field(default_factory=MapsConfig)
     firestore: FirestoreConfig = field(default_factory=FirestoreConfig)
@@ -134,7 +136,7 @@ class AppConfig:
     def from_env(cls) -> "AppConfig":
         return cls(
             telegram=TelegramConfig.from_env(),
-            gemini=GeminiConfig.from_env(),
+            openrouter=OpenRouterConfig.from_env(),
             deepseek=DeepSeekConfig.from_env(),
             maps=MapsConfig.from_env(),
             firestore=FirestoreConfig.from_env(),
